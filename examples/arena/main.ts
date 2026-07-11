@@ -12,7 +12,7 @@ import {
   behaviorSystem, aggroSystem, combatSystem, dealDamage,
   LootTables, lootSystem, QuestLog, offerQuest, questSystem,
   Mind, MindMemory, CognitionDriver, OpenAICompatibleProvider, InferenceBudget,
-  Voice, WebSpeechVoice, voiceSystem, TouchControls,
+  Voice, WebSpeechVoice, voiceSystem, TouchControls, WebAudioService, audioSystem,
 } from "../../src/index.js";
 import type { Entity, System, VoiceService } from "../../src/index.js";
 import { ThreeRenderer } from "../../src/render3d/three.js";
@@ -350,6 +350,13 @@ world
   .addSystem(questSystem())
   .addSystem(speechSystem())
   .addSystem(voiceSystem(voiceRouter));
+
+// SFX: procedural synth, unlocked by first input (autoplay policy)
+const sfx = new WebAudioService();
+world.addSystem(audioSystem(sfx, () => hero));
+for (const ev of ["pointerdown", "keydown", "touchstart"]) {
+  addEventListener(ev, () => sfx.unlock(), { once: true });
+}
 
 // ── 3D renderer + colosseum ─────────────────────────────────────
 const stage = document.getElementById("stage")!;

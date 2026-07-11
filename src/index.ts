@@ -13,8 +13,9 @@ export * from "./systems/index.js";
 // LLM layer
 export * from "./ai/index.js";
 
-// input
+// input & audio
 export * from "./input/touch.js";
+export * from "./audio/audio.js";
 
 // rendering
 export * from "./render/index.js";
