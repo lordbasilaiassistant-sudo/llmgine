@@ -112,6 +112,9 @@ export const Behavior = defineComponent("Behavior", () => ({
   dirTimer: 0,
   dirX: 0,
   dirY: 0,
+  /** Internal nav state (waypoints from NavGrid pathfinding). */
+  path: [] as Array<{ x: number; y: number }>,
+  repath: 0,
 }));
 
 export const ALL_COMPONENTS = [

@@ -1,4 +1,5 @@
 import type { System } from "../core/ecs.js";
+import type { NavGrid } from "../core/nav.js";
 import { Attack, Behavior, Faction, Health, Transform, Velocity } from "../components.js";
 
 /**
@@ -9,7 +10,7 @@ import { Attack, Behavior, Faction, Health, Transform, Velocity } from "../compo
  *
  * Modes: idle | wander | goto | chase | attack | flee
  */
-export function behaviorSystem(): System {
+export function behaviorSystem(nav?: NavGrid): System {
   return {
     name: "behavior",
     order: -10, // before movement integrates velocity
@@ -19,7 +20,7 @@ export function behaviorSystem(): System {
         const t = world.require(e, Transform);
         const v = world.require(e, Velocity);
 
-        const steerTo = (x: number, y: number, speedMul = 1): number => {
+        const steerDirect = (x: number, y: number, speedMul = 1): number => {
           const dx = x - t.x;
           const dy = y - t.y;
           const dist = Math.hypot(dx, dy);
@@ -31,6 +32,31 @@ export function behaviorSystem(): System {
             v.vy = 0;
           }
           return dist;
+        };
+
+        /** Steer toward a goal, routing around obstacles when a NavGrid is set. */
+        const steerTo = (x: number, y: number, speedMul = 1): number => {
+          const straightDist = Math.hypot(x - t.x, y - t.y);
+          if (!nav || nav.lineClear(t.x, t.y, x, y)) {
+            b.path.length = 0;
+            return steerDirect(x, y, speedMul);
+          }
+          b.repath -= dt;
+          const goalMoved =
+            b.path.length === 0 ||
+            Math.hypot(b.path[b.path.length - 1].x - x, b.path[b.path.length - 1].y - y) > nav.cellSize * 1.5;
+          if (b.repath <= 0 || goalMoved) {
+            b.repath = 0.5;
+            b.path = nav.findPath(t.x, t.y, x, y) ?? [];
+          }
+          if (!b.path.length) return steerDirect(x, y, speedMul); // unreachable: push toward it anyway
+          const wp = b.path[0];
+          if (Math.hypot(wp.x - t.x, wp.y - t.y) < nav.cellSize * 0.6) {
+            b.path.shift();
+            if (!b.path.length) return steerDirect(x, y, speedMul);
+          }
+          steerDirect(b.path[0].x, b.path[0].y, speedMul);
+          return straightDist;
         };
 
         const targetAlive = b.target !== 0 && world.isAlive(b.target);

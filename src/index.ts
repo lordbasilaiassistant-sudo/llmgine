@@ -4,6 +4,7 @@ export * from "./core/loop.js";
 export * from "./core/spatial.js";
 export * from "./core/actions.js";
 export * from "./core/prefab.js";
+export * from "./core/nav.js";
 
 // standard components, verbs, gameplay systems
 export * from "./components.js";
