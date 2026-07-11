@@ -309,9 +309,52 @@ export function pickupModel({ world, entity, sprite }: ModelContext): THREE.Obje
   return g;
 }
 
+// ── STONE PILLAR — cover, routed around by NavGrid ─────────────
+export function pillarModel(): THREE.Object3D {
+  const g = new THREE.Group();
+  const stone = std(0x453a56, { roughness: 0.85 });
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(16, 19, 78, 10), stone);
+  shaft.position.y = 39;
+  g.add(shaft);
+  for (const [y, r] of [[4, 24], [78, 22]] as const) {
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 8, 10), std(0x352b44, { roughness: 0.9 }));
+    cap.position.y = y;
+    g.add(cap);
+  }
+  const trim = new THREE.Mesh(
+    new THREE.TorusGeometry(17.5, 1.2, 6, 14),
+    std(0xd4a24e, { metalness: 0.8, roughness: 0.3, emissive: 0x4a3410, emissiveIntensity: 0.35 }),
+  );
+  trim.rotation.x = Math.PI / 2;
+  trim.position.y = 62;
+  g.add(trim);
+  return g;
+}
+
+// ── HELLFIRE BOLT — the boss's ranged projectile ───────────────
+export function projectileModel({ sprite }: ModelContext): THREE.Object3D {
+  const g = new THREE.Group();
+  const color = new THREE.Color(sprite.color);
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(4.5, 10, 8),
+    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 3, roughness: 0.2 }),
+  );
+  core.position.y = 18;
+  g.add(core);
+  const light = new THREE.PointLight(color, 2600, 90, 2);
+  light.position.y = 18;
+  g.add(light);
+  g.userData.animate = (time: number, _w: World, e: number) => {
+    core.scale.setScalar(1 + Math.sin(time * 22 + e) * 0.25);
+  };
+  return g;
+}
+
 export function registerModels(r: ThreeRenderer): void {
   r.defineModel("gladiator", gladiator)
     .defineModel("arenamaster", arenaMaster)
     .defineModel("goblin", goblinModel)
-    .defineModel("pickup", pickupModel);
+    .defineModel("pickup", pickupModel)
+    .defineModel("pillar", pillarModel)
+    .defineModel("projectile", projectileModel);
 }

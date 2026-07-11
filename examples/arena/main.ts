@@ -13,6 +13,7 @@ import {
   LootTables, lootSystem, QuestLog, offerQuest, questSystem,
   Mind, MindMemory, CognitionDriver, OpenAICompatibleProvider, InferenceBudget,
   Voice, WebSpeechVoice, voiceSystem, TouchControls, WebAudioService, audioSystem,
+  NavGrid, Ranged, shootVerb, projectileSystem,
 } from "../../src/index.js";
 import type { Entity, System, VoiceService } from "../../src/index.js";
 import { ThreeRenderer } from "../../src/render3d/three.js";
@@ -24,8 +25,22 @@ import { KokoroVoice } from "./kokoro-voice.js";
 const ARENA_R = 380;
 const world = new World(20260710);
 const grid = new SpatialGrid();
+const nav = new NavGrid(32);
 const actions = new ActionRegistry();
 for (const v of STANDARD_VERBS) actions.register(v);
+actions.register(shootVerb);
+
+// four stone pillars — cover from the boss's fire, routed around via NavGrid
+const PILLARS: Array<[number, number]> = [
+  [-190, -60], [190, -60], [-150, 170], [150, 170],
+];
+for (const [px, py] of PILLARS) {
+  const e = world.create();
+  world.add(e, Transform, { x: px, y: py });
+  world.add(e, Collider, { radius: 22, solid: true });
+  world.add(e, Sprite, { kind: "pillar", color: "#3a2f4a", size: 44, layer: 0 });
+  nav.blockCircle(px, py, 26);
+}
 
 // player melee strike: swing at the nearest enemy in reach
 actions.register({
@@ -110,6 +125,8 @@ function makeBoss(): Entity {
   world.add(e, Attack, { damage: 16, range: 64, cooldown: 1.3 });
   // waits near the throne (aggro on approach), leashes back — cull the pack first, then duel
   world.add(e, Behavior, { mode: "idle", sightRange: 260, homeX: 0, homeY: -180, leash: 340 });
+  // hellfire bolts — the Mind chooses when to shoot (its own tool call)
+  world.add(e, Ranged, { damage: 12, speed: 260, range: 420, cooldown: 2.4, color: "#ff5d45" });
   world.add(e, Speech);
   world.add(e, LootDrop, { table: "boss-drops" });
   world.add(e, Voice, { voiceId: "bm_george", rate: 0.9, pitch: 0.6 });
@@ -120,7 +137,7 @@ function makeBoss(): Entity {
     tier: "fast",
     thinkEvery: 9,
     wakeOn: ["combat:damaged", "speech"],
-    verbs: ["say", "attack", "move_to", "emote", "flee"],
+    verbs: ["say", "attack", "move_to", "emote", "flee", "shoot"],
     sightRange: 900,
     fallbackMode: "attack",
   });
@@ -340,10 +357,11 @@ world
   .addSystem(actionSystem(actions))
   .addSystem(playerInputSystem())
   .addSystem(aggroSystem())
-  .addSystem(behaviorSystem())
+  .addSystem(behaviorSystem(nav))
   .addSystem(movementSystem(grid))
   .addSystem(collisionSystem(grid))
   .addSystem(pitBoundsSystem())
+  .addSystem(projectileSystem(grid))
   .addSystem(combatSystem())
   .addSystem(lootSystem(loot))
   .addSystem(autoPickupSystem())

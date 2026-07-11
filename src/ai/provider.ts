@@ -147,9 +147,10 @@ export class OpenAICompatibleProvider implements ChatProvider {
         try {
           args = JSON.parse(tc.function?.arguments ?? "{}");
         } catch {
-          /* leave {} — validation layer will reject */
+          /* leave {} — repair below may still recover */
         }
-        return { id: tc.id ?? "", name: tc.function?.name ?? "", args };
+        const repaired = repairToolCall(tc.function?.name ?? "", args, req.tools);
+        return { id: tc.id ?? "", ...repaired };
       });
       // reasoning models may leave content empty and answer in reasoning_content
       const text =
@@ -169,6 +170,41 @@ export class OpenAICompatibleProvider implements ChatProvider {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * Repair malformed tool calls. GLM flash sometimes crams the arguments into
+ * the function NAME as XML, e.g. name: "say\n<arg_value>Halt!</arg_value>",
+ * arguments: "{}". Recover the real name, and map <arg_key>/<arg_value> pairs
+ * (or a single bare <arg_value> onto the tool's first required parameter,
+ * resolved from the request's own tool schema).
+ */
+export function repairToolCall(
+  rawName: string,
+  args: Record<string, any>,
+  tools?: any[],
+): { name: string; args: Record<string, any> } {
+  if (!/[<\n]/.test(rawName)) return { name: rawName, args };
+  const name = (rawName.match(/^[\w-]+/) ?? [""])[0];
+  const keys = [...rawName.matchAll(/<arg_key>([^<]*)<\/arg_key>/g)].map((m) => m[1].trim());
+  const vals = [...rawName.matchAll(/<arg_value>([\s\S]*?)<\/arg_value>/g)].map((m) => m[1].trim());
+  const out = { ...args };
+  if (keys.length && keys.length === vals.length) {
+    keys.forEach((k, i) => (out[k] = coerce(vals[i])));
+  } else if (vals.length === 1) {
+    const tool = tools?.find((t) => t?.function?.name === name);
+    const param: string | undefined =
+      tool?.function?.parameters?.required?.[0] ??
+      Object.keys(tool?.function?.parameters?.properties ?? {})[0];
+    if (param) out[param] = coerce(vals[0]);
+  }
+  return { name, args: out };
+}
+
+function coerce(v: string): string | number | boolean {
+  if (v === "true") return true;
+  if (v === "false") return false;
+  return v !== "" && !isNaN(Number(v)) ? Number(v) : v;
 }
 
 /** Deterministic scripted provider for unit tests and offline demos. */
