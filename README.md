@@ -140,12 +140,20 @@ suite (`npm run test:live`) where a real model drives a Mind through the intent
 pipeline and Genesis generates a valid, spawnable prefab. The demo runs the
 full loop in-browser with a live boss mind.
 
-**Stubbed / roadmap:**
-- Export pipeline (Windows `.exe` via Electron, Android/iOS via Capacitor,
-  PWA, store listing kits) — designed (see ARCHITECTURE §6.5), not yet built.
-- `create` CLI game scaffolder.
+**Also works (tested):** `npx llmgine create <name>` scaffolds a playable
+starter game; `npx llmgine export windows|android|ios|pwa|store` generates the
+Electron/.exe config, Capacitor mobile config, installable PWA, and a store
+listing kit (assets checklist, pricing worksheet, AI disclosure) — generator
+output is covered by CLI subprocess tests. The heavy toolchains run in *your*
+game project ([#1](https://github.com/lordbasilaiassistant-sudo/llmgine/issues/1)
+tracks producing reference artifacts).
+
+**Stubbed / roadmap (tracked as issues):**
+- Engine basics: audio service (#2), touch/gamepad input (#3), projectiles &
+  ranged combat (#4), obstacles + pathfinding (#5), glTF loading helpers (#6),
+  save slots (#7).
 - Multiplayer (the event journal + intent log are the designed foundation).
-- Voxel/heightmap terrain; glTF model loading helpers; STT input.
+- Voxel/heightmap terrain; STT input.
 - Vision ("pixels" Eyes) is wired end-to-end but not yet exercised by the demo.
 
 ## License
