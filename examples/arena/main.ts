@@ -13,7 +13,7 @@ import {
   LootTables, lootSystem, QuestLog, offerQuest, questSystem,
   Mind, MindMemory, CognitionDriver, OpenAICompatibleProvider, InferenceBudget,
   Voice, WebSpeechVoice, voiceSystem, TouchControls, WebAudioService, audioSystem,
-  NavGrid, Ranged, shootVerb, projectileSystem,
+  NavGrid, Ranged, shootVerb, projectileSystem, GamepadInput,
 } from "../../src/index.js";
 import type { Entity, System, VoiceService } from "../../src/index.js";
 import { ThreeRenderer } from "../../src/render3d/three.js";
@@ -270,6 +270,7 @@ function playerStrike() {
 }
 
 const touch = new TouchControls(document.body, { onAction: () => playerStrike() });
+const gamepad = new GamepadInput({ buttons: { 0: () => playerStrike(), 7: () => playerStrike() } });
 
 function playerInputSystem(): System {
   return {
@@ -284,14 +285,19 @@ function playerInputSystem(): System {
       if (keys.has("s") || keys.has("arrowdown")) y += 1;
       if (keys.has("a") || keys.has("arrowleft")) x -= 1;
       if (keys.has("d") || keys.has("arrowright")) x += 1;
+      gamepad.poll();
       if (touch.state.active) {
         x = touch.state.x;
         y = touch.state.y;
+      } else if (gamepad.state.active) {
+        x = gamepad.state.x;
+        y = gamepad.state.y;
       }
       const m = Math.hypot(x, y) || 1;
+      const analog = touch.state.active || gamepad.state.active;
       const mag = Math.min(1, Math.hypot(x, y));
-      v.vx = (x / m) * v.maxSpeed * (touch.state.active ? mag : 1);
-      v.vy = (y / m) * v.maxSpeed * (touch.state.active ? mag : 1);
+      v.vx = (x / m) * v.maxSpeed * (analog ? mag : 1);
+      v.vy = (y / m) * v.maxSpeed * (analog ? mag : 1);
     },
   };
 }
@@ -374,7 +380,10 @@ world
 const sfx = new WebAudioService();
 world.addSystem(audioSystem(sfx, () => hero));
 for (const ev of ["pointerdown", "keydown", "touchstart"]) {
-  addEventListener(ev, () => sfx.unlock(), { once: true });
+  addEventListener(ev, () => {
+    sfx.unlock();
+    setTimeout(() => sfx.music("ambient", 0.2), 300); // colosseum bed once unlocked
+  }, { once: true });
 }
 
 // ── 3D renderer + colosseum ─────────────────────────────────────

@@ -19,6 +19,9 @@ export interface PlayOptions {
 export interface AudioService {
   play(sound: string, opts?: PlayOptions): void;
   setListener(x: number, y: number): void;
+  /** Start looping background music (procedural or a loaded sample). Replaces any current track. */
+  music?(track: string, volume?: number): void;
+  stopMusic?(): void;
 }
 
 /** Records plays — headless/tests. */
@@ -37,6 +40,7 @@ export class WebAudioService implements AudioService {
   private listener = { x: 0, y: 0 };
   private samples = new Map<string, AudioBuffer>();
   private synths = new Map<string, Synth>();
+  private musicNodes: { stop: () => void } | null = null;
   /** Distance at which a positioned sound falls silent. */
   falloff = 600;
   masterVolume = 0.6;
@@ -95,6 +99,65 @@ export class WebAudioService implements AudioService {
     }
     this.synths.get(sound)?.(this.ctx, g);
   }
+
+  /**
+   * Looping music. Loaded samples loop directly; otherwise the built-in
+   * procedural "ambient" track plays: a slow minor drone + sparse arpeggio,
+   * generated once into a buffer and looped (zero assets).
+   */
+  music(track = "ambient", volume = 0.25): void {
+    if (!this.ctx || this.ctx.state !== "running") return;
+    this.stopMusic();
+    const ctx = this.ctx;
+    const g = ctx.createGain();
+    g.gain.value = volume * this.masterVolume;
+    g.connect(ctx.destination);
+    const sample = this.samples.get(track);
+    const src = ctx.createBufferSource();
+    src.buffer = sample ?? renderAmbientLoop(ctx);
+    src.loop = true;
+    src.connect(g);
+    src.start();
+    this.musicNodes = {
+      stop: () => {
+        g.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
+        setTimeout(() => src.stop(), 700);
+      },
+    };
+  }
+
+  stopMusic(): void {
+    this.musicNodes?.stop();
+    this.musicNodes = null;
+  }
+}
+
+/** 8-bar looping ambient bed rendered offline: D-minor drone + pentatonic pings. */
+function renderAmbientLoop(ctx: AudioContext): AudioBuffer {
+  const sr = ctx.sampleRate;
+  const beat = 60 / 68; // 68 bpm
+  const len = Math.floor(sr * beat * 16);
+  const buf = ctx.createBuffer(2, len, sr);
+  const notes = [146.83, 174.61, 220, 293.66, 349.23]; // D F A d f
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) {
+      const t = i / sr;
+      // drone: two slow detuned sines an octave apart
+      let v =
+        0.16 * Math.sin(2 * Math.PI * 73.42 * t + ch) * (0.8 + 0.2 * Math.sin(2 * Math.PI * 0.11 * t)) +
+        0.1 * Math.sin(2 * Math.PI * 146.83 * t * 1.003);
+      // sparse pings on a deterministic pattern
+      const step = Math.floor(t / beat);
+      const local = t - step * beat;
+      if (step % 2 === ch % 2 && local < 1.2) {
+        const note = notes[(step * 7 + ch * 3) % notes.length];
+        v += 0.12 * Math.sin(2 * Math.PI * note * 2 * local) * Math.exp(-local * 3.2);
+      }
+      data[i] = v;
+    }
+  }
+  return buf;
 }
 
 // ── procedural stock SFX ────────────────────────────────────────
