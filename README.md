@@ -135,10 +135,18 @@ Full design: [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Honest status (v0.1)
 
-**Works (tested):** everything in the table above — 29 unit tests + a live GLM
+**Works (tested):** everything in the table above — 50 unit tests + a live GLM
 suite (`npm run test:live`) where a real model drives a Mind through the intent
-pipeline and Genesis generates a valid, spawnable prefab. The demo runs the
-full loop in-browser with a live boss mind.
+pipeline and Genesis generates a valid, spawnable prefab. The demo has been
+**played to completion by a scripted agent in a real browser**: pack culled,
+boss duel won, quest completed, rewards granted, live GLM taunts mid-fight —
+and the same run with no API key completes on deterministic fallbacks.
+
+Also in the box now (all tested): touch joystick + gamepad input, procedural
+SFX + looping ambient music (zero asset files), verb-gated projectiles/ranged
+combat, NavGrid A* pathfinding (behavior routes around obstacles), save slots
+(F5/F9 quicksave in the demo), glTF model helpers, and a provider-level repair
+for GLM flash's malformed tool calls (captured live, unit-tested).
 
 **Also works (tested):** `npx llmgine create <name>` scaffolds a playable
 starter game; `npx llmgine export windows|android|ios|pwa|store` generates the
@@ -148,10 +156,9 @@ output is covered by CLI subprocess tests. The heavy toolchains run in *your*
 game project ([#1](https://github.com/lordbasilaiassistant-sudo/llmgine/issues/1)
 tracks producing reference artifacts).
 
-**Stubbed / roadmap (tracked as issues):**
-- Engine basics: audio service (#2), touch/gamepad input (#3), projectiles &
-  ranged combat (#4), obstacles + pathfinding (#5), glTF loading helpers (#6),
-  save slots (#7).
+**Remaining gaps (tracked as issues):**
+- Human feel-tests: audio ear-test (#2), phone/pad in hand (#3), a real .glb
+  exercised in an example (#6).
 - Multiplayer (the event journal + intent log are the designed foundation).
 - Voxel/heightmap terrain; STT input.
 - Vision ("pixels" Eyes) is wired end-to-end but not yet exercised by the demo.
