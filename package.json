@@ -1,0 +1,77 @@
+{
+  "name": "llmgine",
+  "version": "0.1.0",
+  "description": "LLM-native game engine — an ECS engine where Mind (LLM), Eyes (vision), and Voice are core components any entity can have. Build games where anything can think.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./ai": {
+      "types": "./dist/ai/index.d.ts",
+      "import": "./dist/ai/index.js"
+    },
+    "./render": {
+      "types": "./dist/render/index.d.ts",
+      "import": "./dist/render/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
+    }
+  },
+  "bin": {
+    "llmgine-mcp": "./dist/mcp/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "typecheck": "tsc --noEmit",
+    "demo:build": "esbuild examples/arena/main.ts --bundle --format=esm --outfile=examples/arena/main.js",
+    "demo": "npm run demo:build && node scripts/dev-server.mjs examples/arena"
+  },
+  "keywords": [
+    "game-engine",
+    "llm",
+    "ai",
+    "ecs",
+    "npc",
+    "agents",
+    "glm",
+    "ai-npc",
+    "generative",
+    "typescript",
+    "canvas",
+    "mcp",
+    "voice",
+    "vision"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lordbasilaiassistant-sudo/llmgine.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "three": "^0.185.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

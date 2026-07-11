@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Neural Colosseum — llmgine demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --void: #0d0a12;
+    --stone: #1a1420;
+    --bone: #e8dcc8;
+    --gilt: #d4a24e;
+    --oxblood: #c23b4e;
+    --player: #62d9c4;
+    --dim: rgba(232, 220, 200, 0.55);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: var(--void); overflow: hidden; }
+  body { font-family: "IBM Plex Mono", monospace; color: var(--bone); }
+  #stage { position: fixed; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #overlays { position: fixed; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; }
+  .bubble {
+    position: absolute; transform: translate(-50%, -100%);
+    max-width: 240px; padding: 6px 10px; font-size: 12.5px; line-height: 1.45;
+    background: rgba(12, 16, 24, 0.92); border: 1px solid rgba(212, 162, 78, 0.35);
+    border-radius: 7px; color: var(--bone); text-align: center;
+  }
+  .bubble .who { display: block; font-size: 9px; letter-spacing: 0.2em; color: var(--dim); margin-bottom: 2px; }
+  .dmgnum {
+    position: absolute; transform: translate(-50%, -50%);
+    font-weight: 600; font-size: 14px; text-shadow: 0 1px 3px #000;
+    animation: dmgfloat 0.9s ease-out forwards;
+  }
+  @keyframes dmgfloat { to { translate: 0 -46px; opacity: 0; } }
+  .hpbar {
+    position: absolute; transform: translate(-50%, -50%);
+    width: 42px; height: 5px; background: rgba(0,0,0,0.6); border-radius: 2px;
+  }
+  .hpbar i { display: block; height: 100%; border-radius: 2px; background: #5dd97c; }
+  .hpbar i.low { background: #ff5d5d; }
+
+  .hud { position: fixed; z-index: 5; pointer-events: none; }
+  .hud button, .hud input { pointer-events: auto; }
+
+  /* ── boss plaque + thought ribbon (signature) ─────────────── */
+  #plaque {
+    top: 14px; left: 50%; transform: translateX(-50%);
+    width: min(560px, 80vw); text-align: center;
+  }
+  #boss-name {
+    font-family: Cinzel, serif; font-weight: 900; letter-spacing: 0.22em;
+    font-size: 19px; color: var(--bone);
+    text-shadow: 0 0 18px rgba(194, 59, 78, 0.55);
+  }
+  #boss-hp {
+    height: 3px; margin: 7px auto 0; width: 100%;
+    background: rgba(232,220,200,0.12); position: relative;
+  }
+  #boss-hp .fill {
+    position: absolute; inset: 0; transform-origin: left;
+    background: linear-gradient(90deg, var(--oxblood), var(--gilt));
+    transition: transform 0.25s ease;
+  }
+  #ribbon {
+    margin-top: 9px; min-height: 22px;
+    font-size: 12.5px; letter-spacing: 0.04em; color: var(--gilt);
+    opacity: 0.95;
+  }
+  #ribbon .cursor { animation: blink 0.8s steps(1) infinite; }
+  #ribbon.thinking { color: var(--dim); }
+  #ribbon.thinking::after {
+    content: "the mind stirs"; letter-spacing: 0.3em; font-size: 10px;
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  @keyframes pulse { 50% { opacity: 0.25; } }
+
+  /* ── quest stone ──────────────────────────────────────────── */
+  #quests { top: 16px; left: 16px; font-size: 11.5px; max-width: 230px; }
+  #quests h3 {
+    font-family: Cinzel, serif; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.28em; color: var(--gilt); margin-bottom: 6px;
+  }
+  #quests .obj { color: var(--dim); margin-top: 3px; }
+  #quests .obj.done { color: var(--player); text-decoration: line-through; }
+
+  /* ── mind status ──────────────────────────────────────────── */
+  #mind { top: 16px; right: 16px; text-align: right; font-size: 11px; }
+  #mind .badge {
+    display: inline-block; padding: 3px 9px; border: 1px solid var(--dim);
+    letter-spacing: 0.18em; font-size: 9.5px; color: var(--dim);
+  }
+  #mind .badge.live { border-color: var(--player); color: var(--player); }
+  #mind button {
+    margin-top: 7px; margin-left: 6px; background: none; border: 1px solid rgba(232,220,200,0.25);
+    color: var(--dim); font: inherit; font-size: 10px; padding: 4px 9px;
+    letter-spacing: 0.12em; cursor: pointer;
+  }
+  #mind button:hover, #mind button:focus-visible { border-color: var(--gilt); color: var(--gilt); outline: none; }
+
+  /* ── vitals + satchel ─────────────────────────────────────── */
+  #vitals { bottom: 18px; left: 18px; font-size: 11px; }
+  #vitals .hp-wrap { width: 190px; height: 5px; background: rgba(232,220,200,0.12); margin-bottom: 7px; }
+  #vitals .hp { height: 100%; background: var(--player); transform-origin: left; transition: transform 0.15s; }
+  #vitals .keys { color: var(--dim); letter-spacing: 0.06em; }
+  #satchel { bottom: 18px; right: 18px; text-align: right; font-size: 11.5px; color: var(--gilt); }
+  #satchel div { margin-top: 2px; }
+
+  /* ── banner ───────────────────────────────────────────────── */
+  #banner {
+    top: 40%; left: 50%; transform: translate(-50%, -50%) scale(0.9);
+    font-family: Cinzel, serif; font-weight: 900; font-size: 42px;
+    letter-spacing: 0.3em; color: var(--gilt); opacity: 0;
+    text-shadow: 0 0 40px rgba(212, 162, 78, 0.6);
+    transition: all 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+    text-align: center; width: 100%;
+  }
+  #banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  #banner small { display: block; font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: 0.2em; color: var(--dim); margin-top: 10px; }
+
+  /* ── key modal ────────────────────────────────────────────── */
+  #keymodal {
+    position: fixed; inset: 0; z-index: 10; display: none;
+    background: rgba(13, 10, 18, 0.88); backdrop-filter: blur(3px);
+    align-items: center; justify-content: center;
+  }
+  #keymodal.open { display: flex; }
+  #keymodal .panel {
+    width: min(440px, 90vw); border: 1px solid rgba(212,162,78,0.4);
+    background: var(--stone); padding: 26px;
+  }
+  #keymodal h2 { font-family: Cinzel, serif; letter-spacing: 0.18em; font-size: 15px; color: var(--gilt); margin-bottom: 10px; }
+  #keymodal p { font-size: 11.5px; color: var(--dim); line-height: 1.6; margin-bottom: 14px; }
+  #keymodal a { color: var(--player); }
+  #keymodal input {
+    width: 100%; background: var(--void); border: 1px solid rgba(232,220,200,0.25);
+    color: var(--bone); font: inherit; font-size: 12px; padding: 9px 10px;
+  }
+  #keymodal input:focus-visible { border-color: var(--gilt); outline: none; }
+  #keymodal .row { display: flex; gap: 10px; margin-top: 14px; }
+  #keymodal button {
+    flex: 1; background: none; border: 1px solid var(--gilt); color: var(--gilt);
+    font: inherit; font-size: 11px; letter-spacing: 0.14em; padding: 9px 0; cursor: pointer;
+  }
+  #keymodal button.ghost { border-color: rgba(232,220,200,0.25); color: var(--dim); }
+  #keymodal button:hover, #keymodal button:focus-visible { background: rgba(212,162,78,0.12); outline: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #ribbon .cursor, #ribbon.thinking::after { animation: none; }
+    #banner { transition: opacity 0.3s; }
+  }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="overlays"></div>
+
+<div class="hud" id="plaque">
+  <div id="boss-name">THE ARENA MASTER</div>
+  <div id="boss-hp"><div class="fill"></div></div>
+  <div id="ribbon"><span id="ribbon-text"></span><span class="cursor">▍</span></div>
+</div>
+
+<div class="hud" id="quests"><h3>THE RITES</h3><div id="quest-list"></div></div>
+
+<div class="hud" id="mind">
+  <span class="badge" id="mind-badge">INSTINCT MODE</span>
+  <div>
+    <button id="btn-key">GLM KEY</button>
+    <button id="btn-voice">VOICE: OFF</button>
+  </div>
+</div>
+
+<div class="hud" id="vitals">
+  <div class="hp-wrap"><div class="hp" id="player-hp"></div></div>
+  <div class="keys">WASD move · CLICK / SPACE strike · walk over loot</div>
+</div>
+
+<div class="hud" id="satchel"><div id="satchel-list"></div></div>
+<div class="hud" id="banner"></div>
+
+<div id="keymodal">
+  <div class="panel">
+    <h2>GIVE THE MASTER A MIND</h2>
+    <p>
+      Paste a <a href="https://z.ai/subscribe?ic=BWTG6TRYYQ" target="_blank" rel="noreferrer">z.ai GLM API key</a>
+      (glm-4.5-flash is free) and the boss perceives, taunts, and decides with a live LLM.
+      Stored only in this browser's localStorage — fine for local play, never ship a key in a real game.
+      Without a key the arena still runs on deterministic instinct.
+    </p>
+    <input id="key-input" type="password" placeholder="sk-… / GLM key" autocomplete="off" />
+    <div class="row">
+      <button id="key-save">AWAKEN</button>
+      <button id="key-clear" class="ghost">REMOVE KEY</button>
+      <button id="key-close" class="ghost">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./main.js"></script>
+</body>
+</html>
