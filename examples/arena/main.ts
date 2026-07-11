@@ -12,7 +12,7 @@ import {
   behaviorSystem, aggroSystem, combatSystem, dealDamage,
   LootTables, lootSystem, QuestLog, offerQuest, questSystem,
   Mind, MindMemory, CognitionDriver, OpenAICompatibleProvider, InferenceBudget,
-  Voice, WebSpeechVoice, voiceSystem,
+  Voice, WebSpeechVoice, voiceSystem, TouchControls,
 } from "../../src/index.js";
 import type { Entity, System, VoiceService } from "../../src/index.js";
 import { ThreeRenderer } from "../../src/render3d/three.js";
@@ -251,6 +251,8 @@ function playerStrike() {
   if (world.isAlive(hero)) actions.execute(world, { actor: hero, verb: "strike", params: {} });
 }
 
+const touch = new TouchControls(document.body, { onAction: () => playerStrike() });
+
 function playerInputSystem(): System {
   return {
     name: "player-input",
@@ -264,9 +266,14 @@ function playerInputSystem(): System {
       if (keys.has("s") || keys.has("arrowdown")) y += 1;
       if (keys.has("a") || keys.has("arrowleft")) x -= 1;
       if (keys.has("d") || keys.has("arrowright")) x += 1;
+      if (touch.state.active) {
+        x = touch.state.x;
+        y = touch.state.y;
+      }
       const m = Math.hypot(x, y) || 1;
-      v.vx = (x / m) * v.maxSpeed;
-      v.vy = (y / m) * v.maxSpeed;
+      const mag = Math.min(1, Math.hypot(x, y));
+      v.vx = (x / m) * v.maxSpeed * (touch.state.active ? mag : 1);
+      v.vy = (y / m) * v.maxSpeed * (touch.state.active ? mag : 1);
     },
   };
 }
