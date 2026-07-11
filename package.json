@@ -25,10 +25,13 @@
     }
   },
   "bin": {
-    "llmgine-mcp": "./dist/mcp/server.js"
+    "llmgine": "./dist/cli/index.js",
+    "llmgine-mcp": "./dist/mcp/server.js",
+    "llmgine-dev-server": "./scripts/dev-server.mjs"
   },
   "files": [
     "dist",
+    "scripts/dev-server.mjs",
     "README.md",
     "LICENSE"
   ],
