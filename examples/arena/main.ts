@@ -14,6 +14,7 @@ import {
   Mind, MindMemory, CognitionDriver, OpenAICompatibleProvider, InferenceBudget,
   Voice, WebSpeechVoice, voiceSystem, TouchControls, WebAudioService, audioSystem,
   NavGrid, Ranged, shootVerb, projectileSystem, GamepadInput,
+  SaveStore, LocalStorageAdapter, ALL_COMPONENTS,
 } from "../../src/index.js";
 import type { Entity, System, VoiceService } from "../../src/index.js";
 import { ThreeRenderer } from "../../src/render3d/three.js";
@@ -255,10 +256,28 @@ btnVoice.onclick = () => {
 };
 
 // ── input + custom systems ──────────────────────────────────────
+// quicksave/quickload — F5/F9, one slot, survives refresh
+const saver = new SaveStore(new LocalStorageAdapter(), [...ALL_COMPONENTS, Mind, MindMemory, QuestLog, Ranged]);
+async function quickSave() {
+  await saver.save("quick", world, { at: "arena" });
+  typeRibbon("…the arena remembers this moment. (F9 to return)");
+}
+async function quickLoad() {
+  try {
+    await saver.load("quick", world);
+    for (const [, m] of world.each(Mind)) m.thinking = false; // never resume mid-thought
+    typeRibbon("…time folds back.");
+  } catch {
+    typeRibbon("…nothing to return to. (F5 saves)");
+  }
+}
+
 const keys = new Set<string>();
 addEventListener("keydown", (e) => {
   keys.add(e.key.toLowerCase());
   if (e.key === " ") { e.preventDefault(); playerStrike(); }
+  if (e.key === "F5") { e.preventDefault(); quickSave(); }
+  if (e.key === "F9") { e.preventDefault(); quickLoad(); }
 });
 addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 addEventListener("pointerdown", (e) => {
