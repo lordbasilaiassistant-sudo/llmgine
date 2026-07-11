@@ -87,9 +87,9 @@ function makeHero(): Entity {
   world.add(e, Collider, { radius: 12 });
   world.add(e, Sprite, { kind: "gladiator", color: "#62d9c4", size: 24, layer: 1 });
   world.add(e, Named, { name: "Challenger", blurb: "a lone challenger who entered the pit" });
-  world.add(e, Health, { hp: 140, maxHp: 140 });
+  world.add(e, Health, { hp: 200, maxHp: 200 });
   world.add(e, Faction, { id: "challenger", hostileTo: ["arena"] });
-  world.add(e, Attack, { damage: 16, range: 46, cooldown: 0.38 });
+  world.add(e, Attack, { damage: 18, range: 60, cooldown: 0.38 });
   world.add(e, Inventory);
   world.add(e, PlayerControlled);
   world.add(e, Behavior, { mode: "idle" });
@@ -101,14 +101,15 @@ function makeHero(): Entity {
 function makeBoss(): Entity {
   const e = world.create();
   world.add(e, Transform, { x: 0, y: -180 });
-  world.add(e, Velocity, { maxSpeed: 95 });
+  world.add(e, Velocity, { maxSpeed: 80 });
   world.add(e, Collider, { radius: 24 });
   world.add(e, Sprite, { kind: "arenamaster", color: "#c23b4e", size: 52, layer: 1 });
   world.add(e, Named, { name: "The Arena Master", blurb: "an ancient intelligence that rules the pit" });
   world.add(e, Health, { hp: 420, maxHp: 420 });
   world.add(e, Faction, { id: "arena", hostileTo: ["challenger"] });
-  world.add(e, Attack, { damage: 18, range: 64, cooldown: 1.1 });
-  world.add(e, Behavior, { mode: "idle", sightRange: 900, homeX: 0, homeY: -180 });
+  world.add(e, Attack, { damage: 16, range: 64, cooldown: 1.3 });
+  // waits near the throne (aggro on approach), leashes back — cull the pack first, then duel
+  world.add(e, Behavior, { mode: "idle", sightRange: 260, homeX: 0, homeY: -180, leash: 340 });
   world.add(e, Speech);
   world.add(e, LootDrop, { table: "boss-drops" });
   world.add(e, Voice, { voiceId: "bm_george", rate: 0.9, pitch: 0.6 });
@@ -134,10 +135,10 @@ function makeGoblin(x: number, y: number): Entity {
   world.add(e, Collider, { radius: 9 });
   world.add(e, Sprite, { kind: "goblin", color: "#7aa35a", size: 18, layer: 1 });
   world.add(e, Named, { name: "Pit Goblin" });
-  world.add(e, Health, { hp: 34, maxHp: 34 });
+  world.add(e, Health, { hp: 30, maxHp: 30 });
   world.add(e, Faction, { id: "arena", hostileTo: ["challenger"] });
-  world.add(e, Attack, { damage: 6, range: 30, cooldown: 0.9 });
-  world.add(e, Behavior, { mode: "wander", sightRange: 260, homeX: x, homeY: y, leash: 0 });
+  world.add(e, Attack, { damage: 4, range: 30, cooldown: 0.9 });
+  world.add(e, Behavior, { mode: "wander", sightRange: 220, homeX: x, homeY: y, leash: 0 });
   world.add(e, LootDrop, { table: "goblin-drops" });
   return e;
 }
@@ -320,7 +321,7 @@ function spawnerSystem(): System {
         (e) => world.get(e, Named)?.name === "Pit Goblin",
       ).length;
       if (spawnClock <= 0 && goblins < 3) {
-        spawnClock = 14;
+        spawnClock = 22;
         const a = world.rng.next() * Math.PI * 2;
         makeGoblin(Math.cos(a) * (ARENA_R - 30), Math.sin(a) * (ARENA_R - 30));
       }
@@ -543,4 +544,8 @@ const loop = new GameLoop(world, { render: renderFrame });
 loop.start();
 
 // dev handle for debugging (harmless in production)
-(globalThis as any).__game = { world, renderer, actions, hero, boss, driver };
+(globalThis as any).__game = {
+  world, renderer, actions, hero, boss, driver, loop, keys, touch, sfx,
+  C: { Transform, Health, Named, Inventory, Speech, Behavior, Pickup },
+  QuestLog,
+};
