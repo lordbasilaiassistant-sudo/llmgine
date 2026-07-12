@@ -563,6 +563,13 @@ world.events.on("item:pickup", (p: any) => {
   if (p.item?.id === "potion" && p.entity === hero) {
     const h = world.get(hero, Health);
     if (h) h.hp = Math.min(h.maxHp, h.hp + 30);
+    // consumed on the spot — a potion sitting in the satchel implies a
+    // use-item input that doesn't exist
+    const inv = world.get(hero, Inventory);
+    if (inv) {
+      const it = inv.items.find((i) => i.id === "potion");
+      if (it && --it.qty <= 0) inv.items.splice(inv.items.indexOf(it), 1);
+    }
   }
 });
 

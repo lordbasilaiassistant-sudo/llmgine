@@ -263,6 +263,10 @@ export const STOCK_SYNTHS: Record<string, Synth> = {
     osc(ctx, out, "sine", 120, 30, 0.7, 1);
     noise(ctx, out, 0.5, 300, 0.8);
   },
+  whoosh: (ctx, out) => {
+    noise(ctx, out, 0.22, 1600, 0.16);
+    osc(ctx, out, "sine", 320, 90, 0.12, 0.18);
+  },
 };
 
 /** Default event → sound routing; games can pass their own map. */
@@ -270,6 +274,8 @@ export const DEFAULT_SOUND_MAP: Record<string, string> = {
   "combat:swing": "swing",
   "combat:damaged": "hit",
   "combat:death": "death",
+  "combat:whiff": "whoosh", // a dodged swing is audible — the dodge reads
+  jump: "whoosh",
   "loot:dropped": "chime",
   "item:pickup": "coin",
   "quest:completed": "chime",
