@@ -22,6 +22,11 @@ const speedOf = (world: World, e: number) => {
   const v = world.get(e, Velocity);
   return v ? Math.hypot(v.vx, v.vy) : 0;
 };
+/** Windup anticipation progress: 0 = idle, →1 as the telegraphed hit nears. */
+const windupOf = (world: World, e: number) => {
+  const atk = world.get(e, Attack);
+  return atk && atk.winding > 0 && atk.windup > 0 ? 1 - atk.winding / atk.windup : 0;
+};
 /**
  * Rig Y-rotation from the ENGINE's facing (Transform.rot — set by movement,
  * combat and behavior, so standing strikes face their target too). Models
@@ -112,7 +117,8 @@ export function gladiator({ world, entity }: ModelContext): THREE.Object3D {
     heading = headingOf(world, e, heading);
     rig.rotation.y = heading;
     const sp = speedOf(world, e);
-    const walk = sp > 8 ? Math.sin(time * 12) : 0;
+    // stride amplitude follows actual speed — no full-sprint legs at a walk
+    const walk = sp > 8 ? Math.sin(time * 12) * Math.min(1, sp / 170) : 0;
     legL.rotation.x = walk * 0.7;
     legR.rotation.x = -walk * 0.7;
     const air = (world.get(e, Transform)?.z ?? 0) > 1;
@@ -214,9 +220,18 @@ export function arenaMaster({ world, entity }: ModelContext): THREE.Object3D {
   }
   rig.add(arm);
 
-  // under-glow
-  const glow = new THREE.PointLight(0xc23b4e, 7000, 140, 2);
-  glow.position.y = 12;
+  // under-glow: additive disc, not a PointLight — the boss's death would
+  // change the scene light count and stall every shader at the climax
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0xc23b4e,
+    transparent: true,
+    opacity: 0.4,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const glow = new THREE.Mesh(new THREE.CircleGeometry(34, 20), glowMat);
+  glow.rotation.x = -Math.PI / 2;
+  glow.position.y = 0.5;
   g.add(glow);
 
   let heading = Math.PI;
@@ -228,15 +243,17 @@ export function arenaMaster({ world, entity }: ModelContext): THREE.Object3D {
     rig.position.y = breathe * 1.2;
     body.scale.y = 1 + breathe * 0.015;
     const thinking = world.get(e, Mind)?.thinking ?? false;
+    const wind = windupOf(world, e);
     const pulse = thinking ? 2.2 + Math.sin(time * 8) * 1.2 : 0.9 + Math.sin(time * 4) * 0.25;
-    emberMat.emissiveIntensity = pulse;
-    eyeMat.emissiveIntensity = thinking ? 4 : 2.2;
-    eyeMat.emissive.setHex(thinking ? 0xffd166 : 0xff5d45);
-    glow.intensity = 5500 + pulse * 2200;
-    // claw swipe sweeps from the side INTO the facing direction (+Z)
+    emberMat.emissiveIntensity = pulse + wind * 2.5; // embers flare on windup
+    eyeMat.emissiveIntensity = (thinking ? 4 : 2.2) + wind * 4;
+    eyeMat.emissive.setHex(wind > 0 ? 0xffe08a : thinking ? 0xffd166 : 0xff5d45);
+    glowMat.opacity = 0.3 + pulse * 0.08 + wind * 0.3;
+    // ANTICIPATION: claw raises high during the telegraph, then sweeps
+    // INTO the facing direction (+Z) — the hit is readable before it lands
     const whip = swingOf(world, e);
     arm.rotation.y = -whip * 1.5;
-    arm.rotation.z = 0.2 + whip * 0.4;
+    arm.rotation.z = 0.2 + wind * 1.35 + whip * 0.4;
   };
   return g;
 }
@@ -283,10 +300,13 @@ export function goblinModel({ world, entity }: ModelContext): THREE.Object3D {
     rig.rotation.y = heading;
     const sp = speedOf(world, e);
     rig.position.y = sp > 8 ? Math.abs(Math.sin(time * 15 + e)) * 2 : Math.sin(time * 3 + e) * 0.5;
-    // dagger stab: thrust toward facing (+Z), not a sideways flail
+    // ANTICIPATION: dagger pulls back during the telegraph, then thrusts
+    // toward facing (+Z) — never a sideways flail after the damage
+    const wind = windupOf(world, e);
     const whip = swingOf(world, e);
-    armG.rotation.y = -whip * 1.2;
-    armG.position.z = 2 + whip * 3.5;
+    armG.rotation.y = wind * 0.9 - whip * 1.2;
+    armG.position.z = 2 - wind * 2.5 + whip * 3.5;
+    eyeMat.emissiveIntensity = 1.6 + wind * 3; // eyes flare = incoming hit
   };
   return g;
 }
@@ -328,12 +348,26 @@ export function pickupModel({ world, entity, sprite }: ModelContext): THREE.Obje
   }
   core.position.y = 6;
   g.add(core);
-  const light = new THREE.PointLight(new THREE.Color(sprite.color), 1800, 70, 2);
-  light.position.y = 8;
-  g.add(light);
+  // NO per-entity PointLight: every add/remove changes the scene light count
+  // and three.js recompiles ALL shaders (a stall on every drop and pickup).
+  // A glow disc + strong emissive reads just as bright, costs nothing.
+  const glowDisc = new THREE.Mesh(
+    new THREE.CircleGeometry(9, 16),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(sprite.color),
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  glowDisc.rotation.x = -Math.PI / 2;
+  glowDisc.position.y = 0.4;
+  g.add(glowDisc);
   g.userData.animate = (time: number, _w: World, e: number) => {
     core.position.y = 7 + Math.sin(time * 3 + e * 1.7) * 1.6;
     core.rotation.y = time * 1.6 + e;
+    (glowDisc.material as THREE.MeshBasicMaterial).opacity = 0.25 + Math.sin(time * 3 + e) * 0.12;
   };
   return g;
 }
@@ -370,11 +404,23 @@ export function projectileModel({ sprite }: ModelContext): THREE.Object3D {
   );
   core.position.y = 18;
   g.add(core);
-  const light = new THREE.PointLight(color, 2600, 90, 2);
-  light.position.y = 18;
-  g.add(light);
+  // no PointLight (light-count change = full shader recompile per bolt) —
+  // an additive halo shell sells the glow instead
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(7.5, 10, 8),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.3,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  halo.position.y = 18;
+  g.add(halo);
   g.userData.animate = (time: number, _w: World, e: number) => {
     core.scale.setScalar(1 + Math.sin(time * 22 + e) * 0.25);
+    halo.scale.setScalar(1 + Math.sin(time * 17 + e) * 0.35);
   };
   return g;
 }

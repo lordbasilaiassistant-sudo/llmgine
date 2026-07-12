@@ -34,6 +34,7 @@ export class GameLoop {
   running = false;
   /** True while the sim is being driven externally (AgentPort step/pause). */
   paused = false;
+  private stopUntil = 0;
 
   constructor(readonly world: World, opts: LoopOptions = {}) {
     this.timestep = opts.timestep ?? 1 / 60;
@@ -47,10 +48,25 @@ export class GameLoop {
     for (let i = 0; i < n; i++) this.world.step(this.timestep);
   }
 
+  /**
+   * Hitstop: freeze the SIM for a moment while rendering continues — the
+   * classic impact-weight trick (Hades ~4 frames on melee connect). Pure
+   * pacing: sim results are unchanged, just delayed, so determinism holds.
+   */
+  hitstop(seconds: number): void {
+    if (typeof performance === "undefined") return;
+    this.stopUntil = Math.max(this.stopUntil, performance.now() + seconds * 1000);
+  }
+
   /** Feed a real-time frame (ms timestamp). Used by start(); callable manually. */
   frame(nowMs: number): void {
     if (this.paused) {
       this.render?.(0);
+      return;
+    }
+    if (nowMs < this.stopUntil) {
+      this.last = nowMs; // no catch-up burst when the freeze ends
+      this.render?.(1);
       return;
     }
     // null sentinel, not 0 — a first rAF timestamp of exactly 0 is legal.

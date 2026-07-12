@@ -1,6 +1,6 @@
 import type { Entity, World } from "../core/ecs.js";
 import type { SpatialGrid } from "../core/spatial.js";
-import { Faction, Health, Named, Pickup, Speech, Transform } from "../components.js";
+import { Faction, Health, Named, Pickup, Speech, Sprite, Transform } from "../components.js";
 
 /**
  * Eyes — the perception pipeline. Builds what a Mind "sees" each time it
@@ -72,7 +72,10 @@ export function buildPerception(
     if (dist > range) continue;
     const p: PerceivedEntity = {
       id: e,
-      name: world.get(e, Named)?.name ?? `entity#${e}`,
+      // unnamed entities fall back to their visual kind ("pillar", "torch")
+      // instead of an anonymous id — minds/agents shouldn't burn tokens
+      // reasoning about mystery scenery
+      name: world.get(e, Named)?.name ?? world.get(e, Sprite)?.kind ?? `entity#${e}`,
       dist: Math.round(dist),
       dir: dirOf(dx, dy),
     };

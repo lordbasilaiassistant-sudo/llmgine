@@ -400,6 +400,92 @@ describe("facing + jump — engine guarantees (no game can ship these broken)", 
   });
 });
 
+describe("combat feel — telegraphs, knockback, landing recovery", () => {
+  it("AI melee winds up before damage — never a same-tick hit", () => {
+    const world = new World(1);
+    const grid = new SpatialGrid();
+    world.addSystem(behaviorSystem()).addSystem(movementSystem(grid)).addSystem(combatSystem());
+    const goblin = world.create();
+    world.add(goblin, Transform, { x: 0, y: 0 });
+    world.add(goblin, Velocity, {});
+    world.add(goblin, Attack, { damage: 5, range: 60, cooldown: 0.5, windup: 0.35 });
+    world.add(goblin, Behavior, { mode: "attack", target: 0 });
+    const victim = world.create();
+    world.add(victim, Transform, { x: 30, y: 0 });
+    world.add(victim, Health, { hp: 50, maxHp: 50 });
+    world.require(goblin, Behavior).target = victim;
+    let windupTick = 0;
+    let hitTick = 0;
+    world.events.on("combat:windup", () => (windupTick ||= world.tick));
+    world.events.on("combat:damaged", () => (hitTick ||= world.tick));
+    new GameLoop(world).advance(60);
+    expect(windupTick).toBeGreaterThan(0); // telegraph fired
+    expect(hitTick - windupTick).toBeGreaterThanOrEqual(Math.floor(0.35 * 60) - 1); // reactable gap
+    expect(world.require(victim, Health).hp).toBeLessThan(50); // and it does land
+  });
+
+  it("a windup whiffs if the target escapes before impact", () => {
+    const world = new World(1);
+    const grid = new SpatialGrid();
+    world.addSystem(behaviorSystem()).addSystem(movementSystem(grid)).addSystem(combatSystem());
+    const goblin = world.create();
+    world.add(goblin, Transform, { x: 0, y: 0 });
+    world.add(goblin, Velocity, { maxSpeed: 0 }); // rooted for the test
+    world.add(goblin, Attack, { damage: 5, range: 40, cooldown: 0.5, windup: 0.3 });
+    world.add(goblin, Behavior, { mode: "attack", target: 0 });
+    const victim = world.create();
+    world.add(victim, Transform, { x: 30, y: 0 });
+    world.add(victim, Velocity, { maxSpeed: 300 });
+    world.add(victim, Health, { hp: 50, maxHp: 50 });
+    world.require(goblin, Behavior).target = victim;
+    let whiffed = false;
+    world.events.on("combat:windup", () => {
+      world.require(victim, Velocity).vx = 300; // sprint away on the telegraph
+    });
+    world.events.on("combat:whiff", () => (whiffed = true));
+    new GameLoop(world).advance(60);
+    expect(whiffed).toBe(true);
+    expect(world.require(victim, Health).hp).toBe(50); // dodge succeeded
+  });
+
+  it("hits shove the victim through the knockback channel", () => {
+    const world = new World(1);
+    const grid = new SpatialGrid();
+    world.addSystem(movementSystem(grid));
+    const attacker = world.create();
+    world.add(attacker, Transform, { x: 0, y: 0 });
+    const victim = world.create();
+    world.add(victim, Transform, { x: 20, y: 0 });
+    world.add(victim, Velocity, { maxSpeed: 0 }); // cannot walk — shove only
+    world.add(victim, Health, { hp: 50, maxHp: 50 });
+    dealDamage(world, attacker, victim, 5, 150);
+    new GameLoop(world).advance(45); // shove + full decay (~0.6s)
+    const t = world.require(victim, Transform);
+    expect(t.x).toBeGreaterThan(26); // pushed away from the attacker
+    expect(world.require(victim, Velocity).kx).toBe(0); // and the shove decayed out
+  });
+
+  it("landing recovery blocks bunny-hopping", () => {
+    const world = new World(1);
+    const grid = new SpatialGrid();
+    const actions = registry();
+    world.addSystem(actionSystem(actions)).addSystem(movementSystem(grid));
+    const e = world.create();
+    world.add(e, Transform, {});
+    world.add(e, Velocity, {});
+    expect(actions.execute(world, { actor: e, verb: "jump", params: {} }).ok).toBe(true);
+    let landedTick = 0;
+    world.events.on("jump:landed", () => (landedTick ||= world.tick));
+    new GameLoop(world).advance(60); // full arc + a beat
+    expect(landedTick).toBeGreaterThan(0);
+    const rejump = actions.execute(world, { actor: e, verb: "jump", params: {} });
+    expect(rejump.ok).toBe(false); // still in landing recovery
+    expect(rejump.error).toContain("landing");
+    new GameLoop(world).advance(30); // recovery (0.45s) elapses
+    expect(actions.execute(world, { actor: e, verb: "jump", params: {} }).ok).toBe(true);
+  });
+});
+
 describe("behavior repath throttle (#20)", () => {
   it("an unreachable goal does not re-run A* every tick", () => {
     const nav = new NavGrid(32);

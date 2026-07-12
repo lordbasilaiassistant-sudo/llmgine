@@ -22,6 +22,8 @@ export const Ranged = defineComponent("Ranged", () => ({
   ready: 0,
   /** Projectile visual. */
   color: "#ffd166",
+  /** Knockback impulse on hit, units/sec. */
+  knockback: 90,
 }));
 
 export const Projectile = defineComponent("Projectile", () => ({
@@ -32,6 +34,7 @@ export const Projectile = defineComponent("Projectile", () => ({
   /** Seconds until the projectile expires. */
   ttl: 1,
   hitRadius: 10,
+  knockback: 90,
 }));
 
 export const shootVerb: VerbDef = {
@@ -65,6 +68,14 @@ export const shootVerb: VerbDef = {
       if (tt) {
         tx = tt.x;
         ty = tt.y;
+        // lead a moving target by ~65% of the flight time — aiming at the
+        // current position means any strafing target dodges every shot
+        const tv = w.get(Number(a.params.target), Velocity);
+        if (tv && (tv.vx !== 0 || tv.vy !== 0)) {
+          const flight = Math.hypot(tt.x - t.x, tt.y - t.y) / r.speed;
+          tx += tv.vx * flight * 0.65;
+          ty += tv.vy * flight * 0.65;
+        }
       }
     }
     if (!Number.isFinite(tx) || !Number.isFinite(ty)) return; // no aim point survived validation
@@ -81,6 +92,7 @@ export const shootVerb: VerbDef = {
       source: a.actor,
       faction: w.get(a.actor, Faction)?.id ?? "",
       ttl: r.range / r.speed,
+      knockback: r.knockback,
     });
     w.add(p, Sprite, { kind: "projectile", color: r.color, size: 8, layer: 2 });
     w.add(p, Collider, { radius: 4, solid: false });
@@ -153,7 +165,7 @@ export function projectileSystem(grid: SpatialGrid, nav?: import("../core/nav.js
           }
         }
         if (hit) {
-          dealDamage(world, p.source, hit, p.damage);
+          dealDamage(world, p.source, hit, p.damage, p.knockback);
           world.destroy(e);
         }
       }

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { World } from "../core/ecs.js";
-import { Sprite, Transform } from "../components.js";
+import { Sprite, Transform, Velocity } from "../components.js";
 import type { Renderer } from "../render/renderer.js";
 import { TransformLerp } from "../render/interp.js";
 
@@ -234,10 +234,12 @@ export class ThreeRenderer implements Renderer {
     const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
     const dt = this.lastDrawMs ? Math.min((nowMs - this.lastDrawMs) / 1000, 0.1) : 1 / 60;
     this.lastDrawMs = nowMs;
-    const posK = 1 - Math.pow(1 - 0.05, dt * 60);
+    const posK = 1 - Math.pow(1 - 0.09, dt * 60); // tighter: ≤15u trail at full sprint
     const lookK = 1 - Math.pow(1 - 0.08, dt * 60);
     let fx = 0,
-      fz = 0;
+      fz = 0,
+      lvx = 0,
+      lvy = 0;
     if (this.followTarget && world.isAlive(this.followTarget)) {
       const t = world.get(this.followTarget, Transform);
       const ip = this.xf.at(this.followTarget, alpha);
@@ -248,14 +250,22 @@ export class ThreeRenderer implements Renderer {
         fx = t.x;
         fz = t.y;
       }
+      // velocity lookahead — bias the view TOWARD travel (action-game
+      // convention: show the player what they're running into)
+      const v = world.get(this.followTarget, Velocity);
+      if (v) {
+        const clampU = (n: number) => Math.max(-60, Math.min(60, n));
+        lvx = clampU(v.vx * 0.35);
+        lvy = clampU(v.vy * 0.35);
+      }
     }
-    this.camGoal.set(fx * 0.6, this.opts.cameraHeight, fz * 0.6 + this.opts.cameraDistance);
+    this.camGoal.set(fx * 0.6 + lvx * 0.5, this.opts.cameraHeight, fz * 0.6 + lvy * 0.5 + this.opts.cameraDistance);
     this.camera.position.lerp(this.camGoal, posK);
     if (this.shake > 0) {
       this.camera.position.x += (Math.random() - 0.5) * this.shake;
       this.camera.position.y += (Math.random() - 0.5) * this.shake * 0.6;
     }
-    this.lookGoal.set(fx * 0.75, 18, fz * 0.75);
+    this.lookGoal.set(fx * 0.75 + lvx, 18, fz * 0.75 + lvy);
     this.lookAt.lerp(this.lookGoal, lookK);
     this.camera.lookAt(this.lookAt);
 
@@ -310,6 +320,38 @@ export class ThreeRenderer implements Renderer {
       sy: (-v.y * 0.5 + 0.5) * this.container.clientHeight,
       visible: v.z < 1,
     };
+  }
+
+  /**
+   * The entity whose MODEL is under the cursor (raycast against the actual
+   * meshes — players click the sprite they see, not its ground shadow).
+   * Returns 0 when nothing entity-owned is hit.
+   */
+  entityAt(clientX: number, clientY: number): number {
+    this.camera.updateMatrixWorld();
+    const rect = this.gl.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const roots: THREE.Object3D[] = [];
+    const owner = new Map<THREE.Object3D, number>();
+    for (const [e, rec] of this.objects) {
+      roots.push(rec.obj);
+      owner.set(rec.obj, e);
+    }
+    const hits = ray.intersectObjects(roots, true);
+    for (const hit of hits) {
+      let o: THREE.Object3D | null = hit.object;
+      while (o) {
+        const e = owner.get(o);
+        if (e !== undefined) return e;
+        o = o.parent;
+      }
+    }
+    return 0;
   }
 
   /**

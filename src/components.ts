@@ -23,6 +23,15 @@ export const Velocity = defineComponent("Velocity", () => ({
   maxSpeed: 120,
   /** Vertical speed (jumping) — integrated with gravity by movementSystem. */
   vz: 0,
+  /** Knockback channel — added on top of vx/vy (NOT speed-clamped), decays
+   * fast. Hits shove things; separate channel so it can't be steered away. */
+  kx: 0,
+  ky: 0,
+  /** Landing recovery before the next jump — bunny-hopping must never be a
+   * dominant strategy (jump dodges attacks, so free spam = combat immunity). */
+  jumpCooldown: 0.45,
+  /** Internal: seconds of landing recovery remaining. */
+  jumpReady: 0,
 }));
 
 /** Airborne entities above this height are missed by melee and projectiles —
@@ -75,6 +84,16 @@ export const Attack = defineComponent("Attack", () => ({
   cooldown: 0.8,
   /** Internal: seconds until next attack allowed. */
   ready: 0,
+  /** Telegraph: seconds of visible windup before an AI swing lands. The hit
+   * only connects if the target is still in reach when it expires — enemy
+   * damage is REACTABLE by default in every game (0 = instant, for players). */
+  windup: 0.35,
+  /** Internal: seconds left in the current windup (0 = not winding). */
+  winding: 0,
+  /** Internal: entity the current windup will strike. */
+  windupTarget: 0,
+  /** Knockback impulse applied to the victim on hit, units/sec. */
+  knockback: 120,
 }));
 
 export const Inventory = defineComponent("Inventory", () => ({

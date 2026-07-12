@@ -33,8 +33,13 @@ export interface TopDownControlsOptions {
   screenToWorld?: (clientX: number, clientY: number) => { x: number; y: number } | null;
   /** Spatial grid for click-to-attack target picking (optional). */
   grid?: SpatialGrid;
-  /** Primary action (Space / gamepad A / touch action zone). */
-  onAction?: () => void;
+  /** Primary action (F / gamepad / touch action zone). Return the verb's
+   * ActionResult (or `{ok:false}`) to enable input buffering: a press that
+   * lands during a cooldown is retried for `bufferWindow` seconds instead of
+   * being eaten — mashing attack always yields the next possible swing. */
+  onAction?: () => void | { ok: boolean };
+  /** Seconds a failed action/jump press stays buffered. Default 0.25 / 0.18. */
+  bufferWindow?: number;
   /** Reuse existing input instances, or let the controller create its own. */
   touch?: TouchControls;
   gamepad?: GamepadInput;
@@ -63,6 +68,9 @@ export class TopDownControls {
   private km: typeof DEFAULT_KEYS;
   private disposers: Array<() => void> = [];
   private moveMarker: { x: number; y: number; t: number } | null = null;
+  private actionBuf = 0;
+  private jumpBuf = 0;
+  private pendingClick: { x: number; y: number } | null = null;
 
   constructor(opts: TopDownControlsOptions) {
     this.opts = opts;
@@ -74,12 +82,14 @@ export class TopDownControls {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const k = e.key.toLowerCase();
       this.keys.add(k);
+      // intent only — verbs execute inside system() so every sim mutation
+      // happens IN the tick (off-tick executes break replay determinism)
       if (jumpKeys.includes(e.key) || jumpKeys.includes(k)) {
         e.preventDefault();
-        this.jump();
+        this.queueJump();
       } else if (actionKeys.includes(k)) {
         e.preventDefault();
-        this.opts.onAction?.();
+        this.queueAction();
       }
     };
     const onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.key.toLowerCase());
@@ -94,7 +104,9 @@ export class TopDownControls {
       const target: any = opts.clickTarget ?? window;
       const onPointer = (e: PointerEvent) => {
         if ((e.target as HTMLElement)?.tagName !== "CANVAS") return;
-        this.handleClick(e.clientX, e.clientY);
+        // resolve the ground point now (render/camera state), act in-tick
+        const p = opts.screenToWorld!(e.clientX, e.clientY);
+        if (p) this.pendingClick = p;
       };
       target.addEventListener("pointerdown", onPointer);
       this.disposers.push(() => target.removeEventListener("pointerdown", onPointer));
@@ -106,21 +118,37 @@ export class TopDownControls {
     return this.moveMarker;
   }
 
-  /** Jump via the standard verb; primary action if jump isn't registered. */
-  jump(): void {
-    const { world, actions } = this.opts;
-    const avatar = this.opts.avatar();
-    if (!world.isAlive(avatar)) return;
-    const res = actions.execute(world, { actor: avatar, verb: "jump", params: {} });
-    if (!res.ok && res.error?.startsWith("unknown verb")) this.opts.onAction?.();
+  /** Queue the primary action (buffered — a press during cooldown fires when ready). */
+  queueAction(): void {
+    this.actionBuf = this.opts.bufferWindow ?? 0.25;
   }
 
-  private handleClick(cx: number, cy: number): void {
-    const { world, actions, grid, screenToWorld } = this.opts;
+  /** Queue a jump (buffered — pressing just before landing still jumps). */
+  queueJump(): void {
+    this.jumpBuf = 0.18;
+  }
+
+  /** Jump via the standard verb; primary action if jump isn't registered. */
+  jump(): boolean {
+    const { world, actions } = this.opts;
+    const avatar = this.opts.avatar();
+    if (!world.isAlive(avatar)) return true;
+    const res = actions.execute(world, { actor: avatar, verb: "jump", params: {} });
+    if (!res.ok && res.error?.startsWith("unknown verb")) {
+      return this.tryAction();
+    }
+    return res.ok;
+  }
+
+  private tryAction(): boolean {
+    const r = this.opts.onAction?.();
+    return !r || (r as { ok?: boolean }).ok !== false;
+  }
+
+  private handleClick(p: { x: number; y: number }): void {
+    const { world, actions, grid } = this.opts;
     const avatar = this.opts.avatar();
     if (!world.isAlive(avatar)) return;
-    const p = screenToWorld!(cx, cy);
-    if (!p) return;
     // enemy under the cursor → attack (the ARPG convention)
     if (grid) {
       const radius = this.opts.attackRadius ?? 34;
@@ -159,6 +187,21 @@ export class TopDownControls {
       order: -30,
       update: ({ world, dt }) => {
         if (this.moveMarker && (this.moveMarker.t -= dt) <= 0) this.moveMarker = null;
+        // clicks resolve in-tick (replayable through the action log)
+        if (this.pendingClick) {
+          const p = this.pendingClick;
+          this.pendingClick = null;
+          this.handleClick(p);
+        }
+        // buffered inputs retry until they land or the window closes
+        if (this.actionBuf > 0) {
+          this.actionBuf -= dt;
+          if (this.tryAction()) this.actionBuf = 0;
+        }
+        if (this.jumpBuf > 0) {
+          this.jumpBuf -= dt;
+          if (this.jump()) this.jumpBuf = 0;
+        }
         const avatar = this.opts.avatar();
         if (!world.isAlive(avatar)) return;
         const v = world.get(avatar, Velocity);

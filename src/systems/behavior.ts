@@ -25,8 +25,14 @@ export function behaviorSystem(nav?: NavGrid): System {
           const dy = y - t.y;
           const dist = Math.hypot(dx, dy);
           if (dist > 1) {
-            v.vx = (dx / dist) * v.maxSpeed * speedMul;
-            v.vy = (dy / dist) * v.maxSpeed * speedMul;
+            // accelerate toward the desired velocity instead of snapping —
+            // AI that turns on a dime reads robotic (player input stays
+            // instant in the controller; this is enemies/NPCs only)
+            const wx = (dx / dist) * v.maxSpeed * speedMul;
+            const wy = (dy / dist) * v.maxSpeed * speedMul;
+            const accel = 900 * dt;
+            v.vx += Math.max(-accel, Math.min(accel, wx - v.vx));
+            v.vy += Math.max(-accel, Math.min(accel, wy - v.vy));
           } else {
             v.vx = 0;
             v.vy = 0;

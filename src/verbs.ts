@@ -132,10 +132,12 @@ export const jumpVerb: VerbDef = {
   description: "Jump — a brief airborne moment; melee swings and projectiles pass beneath you.",
   params: { strength: { type: "number", description: "Launch speed, 60–600 (default 240)" } },
   validate: (w, a) => {
-    if (!w.has(a.actor, Velocity)) return "you cannot jump (no Velocity)";
+    const v = w.get(a.actor, Velocity);
+    if (!v) return "you cannot jump (no Velocity)";
     const t = w.get(a.actor, Transform);
     if (!t) return "you cannot jump (no Transform)";
     if ((t.z ?? 0) > 0) return "already airborne";
+    if ((v.jumpReady ?? 0) > 0) return "still landing"; // no bunny-hop immunity
     return null;
   },
   resolve: (w, a) => {

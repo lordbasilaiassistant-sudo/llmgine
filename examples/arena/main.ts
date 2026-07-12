@@ -78,7 +78,7 @@ actions.register({
       t.rot = Math.atan2(bt.y - t.y, bt.x - t.x); // face what you strike
     }
     w.events.emit("combat:swing", { entity: a.actor, target: best });
-    if (best) dealDamage(w, a.actor, best, atk.damage);
+    if (best) dealDamage(w, a.actor, best, atk.damage, atk.knockback);
   },
 });
 
@@ -113,7 +113,7 @@ function makeHero(): Entity {
   world.add(e, Named, { name: "Challenger", blurb: "a lone challenger who entered the pit" });
   world.add(e, Health, { hp: 200, maxHp: 200 });
   world.add(e, Faction, { id: "challenger", hostileTo: ["arena"] });
-  world.add(e, Attack, { damage: 18, range: 60, cooldown: 0.38 });
+  world.add(e, Attack, { damage: 18, range: 60, cooldown: 0.38, windup: 0, knockback: 140 }); // player: instant + shoves
   world.add(e, Inventory);
   world.add(e, PlayerControlled);
   world.add(e, Behavior, { mode: "idle" });
@@ -125,13 +125,13 @@ function makeHero(): Entity {
 function makeBoss(): Entity {
   const e = world.create();
   world.add(e, Transform, { x: 0, y: -180 });
-  world.add(e, Velocity, { maxSpeed: 80 });
+  world.add(e, Velocity, { maxSpeed: 105 });
   world.add(e, Collider, { radius: 24 });
   world.add(e, Sprite, { kind: "arenamaster", color: "#c23b4e", size: 52, layer: 1 });
   world.add(e, Named, { name: "The Arena Master", blurb: "an ancient intelligence that rules the pit" });
   world.add(e, Health, { hp: 420, maxHp: 420 });
   world.add(e, Faction, { id: "arena", hostileTo: ["challenger"] });
-  world.add(e, Attack, { damage: 16, range: 64, cooldown: 1.3 });
+  world.add(e, Attack, { damage: 16, range: 64, cooldown: 1.3, windup: 0.6, knockback: 170 }); // big telegraphed haymaker
   // waits near the throne (aggro on approach), leashes back — cull the pack first, then duel
   world.add(e, Behavior, { mode: "idle", sightRange: 260, homeX: 0, homeY: -180, leash: 340 });
   // hellfire bolts — the Mind chooses when to shoot (its own tool call)
@@ -163,7 +163,7 @@ function makeGoblin(x: number, y: number): Entity {
   world.add(e, Named, { name: "Pit Goblin" });
   world.add(e, Health, { hp: 30, maxHp: 30 });
   world.add(e, Faction, { id: "arena", hostileTo: ["challenger"] });
-  world.add(e, Attack, { damage: 4, range: 30, cooldown: 0.9 });
+  world.add(e, Attack, { damage: 4, range: 30, cooldown: 0.9, knockback: 90 }); // windup 0.35 default = readable
   world.add(e, Behavior, { mode: "wander", sightRange: 220, homeX: x, homeY: y, leash: 0 });
   world.add(e, LootDrop, { table: "goblin-drops" });
   return e;
@@ -331,7 +331,8 @@ function playerStrike() {
   if (world.isAlive(hero)) actions.execute(world, { actor: hero, verb: "strike", params: {} });
 }
 
-const touch = new TouchControls(document.body, { onAction: () => playerStrike() });
+// touch action routes through the controller queue — fires IN-tick (replayable)
+const touch = new TouchControls(document.body, { onAction: () => controls.queueAction() });
 const gamepad = new GamepadInput({
   buttons: {
     0: () => controls.jump(), // A — jump
@@ -385,20 +386,47 @@ function autoPickupSystem(): System {
 }
 
 let spawnClock = 10;
+// portal telegraph: goblins announce themselves 0.9s before existing —
+// nothing ever materializes inside melee range with zero warning
+const pendingSpawns: Array<{ x: number; y: number; t: number }> = [];
 function spawnerSystem(): System {
   return {
     name: "spawner",
     order: 45,
     update({ world, dt }) {
       if (!world.isAlive(boss) || !world.isAlive(hero)) return;
+      for (let i = pendingSpawns.length - 1; i >= 0; i--) {
+        const p = pendingSpawns[i];
+        p.t -= dt;
+        if (p.t <= 0) {
+          pendingSpawns.splice(i, 1);
+          makeGoblin(p.x, p.y);
+        }
+      }
       spawnClock -= dt;
       const goblins = [...world.query(Behavior)].filter(
         (e) => world.get(e, Named)?.name === "Pit Goblin",
       ).length;
-      if (spawnClock <= 0 && goblins < 3) {
-        spawnClock = 22;
-        const a = world.rng.next() * Math.PI * 2;
-        makeGoblin(Math.cos(a) * SPAWN_R, Math.sin(a) * SPAWN_R);
+      // pressure ramps with boss damage: 3 goblins at full hp → 6 near death,
+      // respawn 22s → 12s below half — minute five must not feel like minute one
+      const bh = world.get(boss, Health);
+      const frac = bh ? bh.hp / bh.maxHp : 1;
+      const cap = 3 + Math.floor((1 - frac) * 3);
+      const respawn = frac < 0.5 ? 12 : 22;
+      if (spawnClock <= 0 && goblins + pendingSpawns.length < cap) {
+        spawnClock = respawn;
+        const ht = world.get(hero, Transform);
+        let sx = 0;
+        let sy = 0;
+        // never spawn on top of the player — resample away from them
+        for (let tries = 0; tries < 4; tries++) {
+          const a = world.rng.next() * Math.PI * 2;
+          sx = Math.cos(a) * SPAWN_R;
+          sy = Math.sin(a) * SPAWN_R;
+          if (!ht || Math.hypot(sx - ht.x, sy - ht.y) > 120) break;
+        }
+        pendingSpawns.push({ x: sx, y: sy, t: 0.9 });
+        world.events.emit("spawn:telegraph", { x: sx, y: sy, duration: 0.9 });
       }
     },
   };
@@ -419,14 +447,10 @@ function impactSystem(): System {
         const source = j.payload?.source;
         if (target === undefined) continue;
         hitFx.set(target, HIT_T);
-        const tt = world.get(target, Transform);
-        const st = source !== undefined ? world.get(source, Transform) : undefined;
-        if (tt && st) {
-          const d = Math.hypot(tt.x - st.x, tt.y - st.y) || 1;
-          const k = target === boss ? 2.5 : target === hero ? 4 : 7;
-          tt.x += ((tt.x - st.x) / d) * k;
-          tt.y += ((tt.y - st.y) / d) * k;
-        }
+        void source;
+        // the shove itself is the engine's knockback channel (Velocity.kx/ky
+        // applied by dealDamage) — the old 2-7u position teleport was
+        // invisible at camera distance
       }
       for (const [e, t] of hitFx) {
         const left = t - dt;
@@ -454,6 +478,44 @@ const TAUNTS = [
   "I was ancient when this stone was quarried. You are an afternoon.",
   "Yield, and I will make it swift. Fight, and I will make it art.",
 ];
+// gap-closer: the boss is slower than the hero by design (kitable) — the
+// counterweight is a TELEGRAPHED lunge every ~6.5s that closes the distance.
+const LUNGE = { clock: 5, winding: 0, dirX: 0, dirY: 0 };
+function bossLungeSystem(): System {
+  return {
+    name: "boss-lunge",
+    order: 12,
+    update({ world, dt }) {
+      if (!world.isAlive(boss) || !world.isAlive(hero)) return;
+      const bv = world.get(boss, Velocity);
+      const bt = world.get(boss, Transform);
+      const ht = world.get(hero, Transform);
+      if (!bv || !bt || !ht) return;
+      if (LUNGE.winding > 0) {
+        LUNGE.winding -= dt;
+        if (LUNGE.winding <= 0) {
+          bv.kx += LUNGE.dirX * 1300;
+          bv.ky += LUNGE.dirY * 1300;
+          world.events.emit("boss:lunge", { x: bt.x, y: bt.y });
+        }
+        return;
+      }
+      const b = world.get(boss, Behavior);
+      const engaged = b && (b.mode === "attack" || b.mode === "chase") && b.target === hero;
+      LUNGE.clock -= dt;
+      const d = Math.hypot(ht.x - bt.x, ht.y - bt.y);
+      if (LUNGE.clock <= 0 && engaged && d > 110 && d < 340) {
+        LUNGE.clock = 6.5;
+        LUNGE.winding = 0.55; // crouch telegraph — jump or reposition NOW
+        LUNGE.dirX = (ht.x - bt.x) / d;
+        LUNGE.dirY = (ht.y - bt.y) / d;
+        bt.rot = Math.atan2(LUNGE.dirY, LUNGE.dirX);
+        world.events.emit("boss:lunge:windup", { duration: 0.55, x: bt.x, y: bt.y });
+      }
+    },
+  };
+}
+
 const DIRECTOR = { clock: 3.5, ix: 0, phase: "press" as "press" | "rain", phaseLeft: 12, engaged: false };
 function bossDirectorSystem(): System {
   return {
@@ -518,6 +580,7 @@ world
   .addSystem(lootSystem(loot))
   .addSystem(autoPickupSystem())
   .addSystem(spawnerSystem())
+  .addSystem(bossLungeSystem())
   .addSystem(bossDirectorSystem())
   .addSystem(questSystem())
   .addSystem(speechSystem())
@@ -611,12 +674,28 @@ world.events.on("combat:damaged", (p: any) => {
     spawnDmgNum(t.x, t.y, `${p.amount}`, p.target === hero ? "#ff6d7d" : "#e8dcc8");
   }
   if (p.target === hero) renderer.shake = Math.min(10, renderer.shake + 5);
+  // hitstop: hits involving the player freeze the sim a few frames — weight
+  if (p.target === hero || p.source === hero) loop.hitstop(0.055);
 });
+// enemy windups get a warning flash at the attacker — read it, then dodge it
+world.events.on("combat:windup", (p: any) => {
+  const t = world.get(p.entity, Transform);
+  if (t && p.target === hero) flashAt(t.x, t.y, 0xffd166, 9000, p.duration ?? 0.35);
+});
+world.events.on("boss:lunge:windup", (p: any) => {
+  flashAt(p.x, p.y, 0xff5d45, 16000, p.duration ?? 0.55);
+  typeRibbon("…the Master coils to LEAP");
+});
+world.events.on("boss:lunge", () => {
+  renderer.shake = Math.min(12, renderer.shake + 7);
+});
+world.events.on("spawn:telegraph", (p: any) => flashAt(p.x, p.y, 0x7aa35a, 9000, p.duration ?? 0.9));
 world.events.on("combat:death", (p: any) => {
   if (p.x !== undefined) {
     flashAt(p.x, p.y, p.entity === boss ? 0xd4a24e : 0x7aa35a, 90000, 0.8);
     burstAt(p.x, p.y, p.entity === boss ? 0xd4a24e : p.entity === hero ? 0x62d9c4 : 0x7aa35a, p.entity === boss ? 36 : 16);
   }
+  loop.hitstop(p.entity === boss ? 0.16 : 0.09); // kills hit hardest
   if (p.entity === boss) { renderer.shake = 14; showBanner("THE MASTER FALLS", "collect your spoils"); }
   if (p.entity === hero) {
     showBanner("THE ARENA CLAIMS YOU", "R — rise again · F9 — return to your last save");
@@ -625,6 +704,14 @@ world.events.on("combat:death", (p: any) => {
 });
 world.events.on("loot:dropped", (p: any) => flashAt(p.x, p.y, 0xd4a24e, 20000, 0.5));
 world.events.on("quest:completed", (p: any) => showBanner("RITES COMPLETE", p.name));
+// teach the sole defensive mechanic the first time hellfire flies
+let taughtJump = false;
+world.events.on("combat:shot", (p: any) => {
+  if (!taughtJump && p.entity === boss) {
+    taughtJump = true;
+    typeRibbon("…hellfire! SPACE — leap over the bolts", 5);
+  }
+});
 
 // banners queue — two same-tick banners both get their moment
 const bannerQ: Array<[string, string]> = [];
@@ -875,6 +962,8 @@ function resetAfterLoad() {
   bannerBusy = false;
   document.getElementById("banner")!.classList.remove("show");
   Object.assign(DIRECTOR, { clock: 3.5, ix: 0, phase: "press", phaseLeft: 12, engaged: false });
+  Object.assign(LUNGE, { clock: 5, winding: 0, dirX: 0, dirY: 0 });
+  pendingSpawns.length = 0;
   const culled = world.get(hero, QuestLog)?.active[0]?.progress[0] ?? 0;
   goblinKills = culled;
   relicSpawned = culled >= 3;

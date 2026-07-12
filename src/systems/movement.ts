@@ -41,8 +41,16 @@ export function movementSystem(grid: SpatialGrid, bounds?: WorldBounds, opts: Mo
           v.vx *= k;
           v.vy *= k;
         }
-        t.x += v.vx * dt;
-        t.y += v.vy * dt;
+        // knockback channel: added on top, never steered, fast exponential decay
+        const kx = v.kx ?? 0;
+        const ky = v.ky ?? 0;
+        t.x += (v.vx + kx) * dt;
+        t.y += (v.vy + ky) * dt;
+        if (kx !== 0 || ky !== 0) {
+          const kd = Math.exp(-dt * 9); // ~gone in 0.35s
+          v.kx = Math.abs(kx) < 1 ? 0 : kx * kd;
+          v.ky = Math.abs(ky) < 1 ? 0 : ky * kd;
+        }
         // facing is an ENGINE guarantee: anything that moves looks where it
         // goes (combat/behavior face targets when standing) — renderers read
         // rot, so no game can ship characters that animate the wrong way
@@ -54,8 +62,11 @@ export function movementSystem(grid: SpatialGrid, bounds?: WorldBounds, opts: Mo
           if (t.z <= 0) {
             t.z = 0;
             v.vz = 0;
+            v.jumpReady = v.jumpCooldown ?? 0.45; // landing recovery
             world.events.emit("jump:landed", { entity: e });
           }
+        } else if ((v.jumpReady ?? 0) > 0) {
+          v.jumpReady -= dt;
         }
         if (bounds) {
           t.x = Math.min(Math.max(t.x, bounds.minX), bounds.maxX);
