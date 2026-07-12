@@ -121,6 +121,12 @@ export const PlayerControlled = defineComponent("PlayerControlled", () => ({
   interact: false,
 }));
 
+/** Quick-use item slots (keys 1-9 in TopDownControls fire use_item). */
+export const Hotbar = defineComponent("Hotbar", () => ({
+  /** Item ids, index = key-1. */
+  slots: [] as string[],
+}));
+
 /** Something a Mind or player said, displayed and audible to nearby entities. */
 export const Speech = defineComponent("Speech", () => ({
   text: "",
@@ -165,4 +171,5 @@ export const ALL_COMPONENTS = [
   PlayerControlled,
   Speech,
   Behavior,
+  Hotbar,
 ];

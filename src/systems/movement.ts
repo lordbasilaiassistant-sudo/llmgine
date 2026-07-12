@@ -1,6 +1,7 @@
 import type { System } from "../core/ecs.js";
 import { SpatialGrid } from "../core/spatial.js";
 import { Collider, Speech, Transform, Velocity } from "../components.js";
+import { statOf } from "./status.js";
 
 export interface WorldBounds {
   minX: number;
@@ -36,8 +37,9 @@ export function movementSystem(grid: SpatialGrid, bounds?: WorldBounds, opts: Mo
           v.vy = 0;
         }
         const speed = Math.hypot(v.vx, v.vy);
-        if (speed > v.maxSpeed && speed > 0) {
-          const k = v.maxSpeed / speed;
+        const cap = v.maxSpeed * statOf(world, e, "speed"); // speed buffs/slows
+        if (speed > cap && speed > 0) {
+          const k = cap / speed;
           v.vx *= k;
           v.vy *= k;
         }

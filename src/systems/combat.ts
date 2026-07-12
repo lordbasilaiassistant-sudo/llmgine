@@ -1,5 +1,6 @@
 import type { Entity, System, World } from "../core/ecs.js";
 import { Attack, Behavior, DODGE_HEIGHT, Faction, Health, Named, Transform, Velocity } from "../components.js";
+import { statOf } from "./status.js";
 
 /**
  * Combat — deterministic core. Melee attacks resolve when an attacker in
@@ -94,7 +95,7 @@ export function combatSystem(): System {
             if (tt && inReach && (tt.z ?? 0) <= DODGE_HEIGHT) {
               t.rot = Math.atan2(tt.y - t.y, tt.x - t.x); // face what you hit
               world.events.emit("combat:swing", { entity: e, target: tgt });
-              dealDamage(world, e, tgt, atk.damage, atk.knockback);
+              dealDamage(world, e, tgt, atk.damage * statOf(world, e, "damage"), atk.knockback);
             } else {
               world.events.emit("combat:whiff", { entity: e, target: tgt });
             }
@@ -127,7 +128,7 @@ export function combatSystem(): System {
           } else if ((tt.z ?? 0) <= DODGE_HEIGHT) {
             // windup 0 = instant (player-controlled attackers stay snappy)
             world.events.emit("combat:swing", { entity: e, target: b.target });
-            dealDamage(world, e, b.target, atk.damage, atk.knockback);
+            dealDamage(world, e, b.target, atk.damage * statOf(world, e, "damage"), atk.knockback);
           }
         }
       }

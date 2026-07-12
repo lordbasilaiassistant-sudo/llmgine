@@ -1,6 +1,8 @@
 import type { World } from "./core/ecs.js";
 import type { Action, VerbDef } from "./core/actions.js";
 import { Attack, Behavior, Faction, Inventory, Named, Pickup, PlayerControlled, Speech, Transform, Velocity } from "./components.js";
+import { useItemVerb } from "./systems/status.js";
+import { areaStrikeVerb } from "./systems/areastrike.js";
 
 /**
  * Standard verb library — the shared vocabulary of players, scripts, and
@@ -229,4 +231,6 @@ export const STANDARD_VERBS: VerbDef[] = [
   stopVerb,
   jumpVerb,
   pickupVerb,
+  useItemVerb,
+  areaStrikeVerb,
 ];

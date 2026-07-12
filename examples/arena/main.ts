@@ -17,7 +17,10 @@ import {
   NavGrid, Ranged, shootVerb, Projectile, projectileSystem, rangedCombatSystem, GamepadInput,
   SaveStore, LocalStorageAdapter, ALL_COMPONENTS, Genesis, PrefabRegistry,
   AgentPort, exposeAgentPort, connectAgentBridge, TopDownControls,
+  Hotbar, Status, statusSystem, AreaAttack, AreaStrikeZone, areaStrikeSystem,
+  attachInspector,
 } from "../../src/index.js";
+import { ParticlePool } from "../../src/render3d/particles.js";
 import type { Entity, System, VoiceService } from "../../src/index.js";
 import { ThreeRenderer } from "../../src/render3d/three.js";
 import { registerModels } from "./models3d.js";
@@ -90,15 +93,16 @@ const loot = new LootTables()
     chance: 0.9,
     items: [
       { id: "gold", name: "Gold", weight: 6, qty: [2, 6], color: "#d4a24e" },
-      { id: "potion", name: "Potion", weight: 2, color: "#e35d6d" },
+      { id: "potion", name: "Potion", weight: 2, color: "#e35d6d", stats: { heal: 30 } },
     ],
   })
   .define({
     name: "sentinel-drops",
     rolls: [1, 2],
     items: [
-      { id: "potion", name: "Potion", weight: 4, color: "#e35d6d" }, // the bounty for making the read
-      { id: "gold", name: "Gold", weight: 4, qty: [6, 12], color: "#d4a24e" },
+      { id: "potion", name: "Potion", weight: 3, color: "#e35d6d", stats: { heal: 30 } },
+      { id: "fury", name: "Fury Draught", weight: 3, color: "#ff8c42", stats: { buffDamage: 1.6, buffDuration: 8 } },
+      { id: "gold", name: "Gold", weight: 3, qty: [6, 12], color: "#d4a24e" },
     ],
   })
   .define({
@@ -123,6 +127,7 @@ function makeHero(): Entity {
   world.add(e, Faction, { id: "challenger", hostileTo: ["arena"] });
   world.add(e, Attack, { damage: 18, range: 60, cooldown: 0.38, windup: 0, knockback: 140 }); // player: instant + shoves
   world.add(e, Inventory);
+  world.add(e, Hotbar, { slots: ["potion", "fury"] }); // 1 = heal, 2 = damage buff
   world.add(e, PlayerControlled);
   world.add(e, Behavior, { mode: "idle" });
   world.add(e, Speech);
@@ -138,6 +143,8 @@ function makeBoss(): Entity {
   world.add(e, Sprite, { kind: "arenamaster", color: "#c23b4e", size: 52, layer: 1 });
   world.add(e, Named, { name: "The Arena Master", blurb: "an ancient intelligence that rules the pit" });
   world.add(e, Health, { hp: 900, maxHp: 900 }); // skilled TTK ~26s — room for the add phases to breathe
+  // lunge landing slams a telegraphed shockwave where you WERE — keep moving
+  world.add(e, AreaAttack, { damage: 30, radius: 85, delay: 0.9, range: 420, cooldown: 5, knockback: 320 });
   world.add(e, Faction, { id: "arena", hostileTo: ["challenger"] });
   // the haymaker must PUNISH face-tanking — at 8dps the old boss lost a
   // stand-still dps race before any add gate could fire. 34dmg/1.9s cycle
@@ -345,7 +352,7 @@ btnVoice.onclick = () => {
 
 // ── input + custom systems ──────────────────────────────────────
 // quicksave/quickload — F5/F9, one slot, survives refresh
-const SAVE_COMPONENTS = [...ALL_COMPONENTS, Mind, MindMemory, QuestLog, Ranged, Projectile, Voice];
+const SAVE_COMPONENTS = [...ALL_COMPONENTS, Mind, MindMemory, QuestLog, Ranged, Projectile, Voice, Status, AreaAttack, AreaStrikeZone];
 const saver = new SaveStore(new LocalStorageAdapter(), SAVE_COMPONENTS);
 async function quickSave() {
   if (!world.isAlive(hero)) {
@@ -590,6 +597,9 @@ function bossLungeSystem(): System {
           bv.kx += LUNGE.dirX * 1300;
           bv.ky += LUNGE.dirY * 1300;
           world.events.emit("boss:lunge", { x: bt.x, y: bt.y });
+          // the landing slam: a danger circle on the hero's position — the
+          // AreaStrike primitive doing boss-fight work (jump or move out)
+          actions.execute(world, { actor: boss, verb: "area_strike", params: { x: ht.x, y: ht.y } }, { internal: true });
         }
         return;
       }
@@ -653,16 +663,10 @@ function bossDirectorSystem(): System {
 }
 
 world.events.on("item:pickup", (p: any) => {
-  if (p.item?.id === "potion" && p.entity === hero) {
-    const h = world.get(hero, Health);
-    if (h) h.hp = Math.min(h.maxHp, h.hp + 30);
-    // consumed on the spot — a potion sitting in the satchel implies a
-    // use-item input that doesn't exist
-    const inv = world.get(hero, Inventory);
-    if (inv) {
-      const it = inv.items.find((i) => i.id === "potion");
-      if (it && --it.qty <= 0) inv.items.splice(inv.items.indexOf(it), 1);
-    }
+  // potions/draughts now live in the satchel — press 1 / 2 to use them
+  // (the use_item verb; Minds and agents share the same path)
+  if ((p.item?.id === "potion" || p.item?.id === "fury") && p.entity === hero) {
+    typeRibbon(p.item.id === "potion" ? "…potion stowed. (1 to drink)" : "…fury stowed. (2 to drink)");
   }
 });
 
@@ -674,6 +678,8 @@ world
   .addSystem(movementSystem(grid))
   .addSystem(collisionSystem(grid))
   .addSystem(pitBoundsSystem())
+  .addSystem(statusSystem()) // potion heals, fury/haste buffs tick here
+  .addSystem(areaStrikeSystem(grid)) // telegraphed danger circles
   .addSystem(rangedCombatSystem(actions, nav)) // chanters fire through the verb gate, LoS-gated
   .addSystem(projectileSystem(grid, nav)) // hellfire stops on pillars — cover is real
   .addSystem(combatSystem())
@@ -710,11 +716,19 @@ const renderer = new ThreeRenderer(stage, {
   fog: { color: 0x0d0a12, near: 1100, far: 2400 },
   cameraDistance: 320, // closer + lower than the launch cam — actors must read
   cameraHeight: 250,
+  bloom: true, // emissive orbs/eyes/hellfire glow for real now
 });
 registerModels(renderer);
 const animateEnv = buildColosseum(renderer, ARENA_R);
+const vfx = new ParticlePool(renderer.scene, { capacity: 2048 });
 renderer.followTarget = hero;
-renderer.onFrame = animateEnv;
+let lastEnvMs = 0;
+renderer.onFrame = (time) => {
+  animateEnv(time);
+  const now = performance.now();
+  vfx.update(lastEnvMs ? Math.min((now - lastEnvMs) / 1000, 0.1) : 1 / 60);
+  lastEnvMs = now;
+};
 addEventListener("resize", () => renderer.resize(innerWidth, innerHeight));
 renderer.resize(innerWidth, innerHeight);
 
@@ -742,27 +756,10 @@ function flashAt(x: number, y: number, color: number, intensity: number, life = 
   f.max = life;
 }
 
-// death bursts: additive ember puffs where something falls
-const bursts: Array<{ pts: any; geo: any; mat: any; vel: Float32Array; t: number; max: number }> = [];
+// death bursts / blast embers — the engine's pooled ParticlePool (zero
+// object churn; the old per-burst Points+material allocation is gone)
 function burstAt(x: number, y: number, color: number, n = 16) {
-  const T = renderer.three;
-  const pos = new Float32Array(n * 3);
-  const vel = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2 + (i % 3) * 0.7;
-    const sp = 55 + (i % 4) * 24;
-    pos.set([x, 12 + (i % 3) * 7, y], i * 3);
-    vel.set([Math.cos(a) * sp, 46 + (i % 5) * 20, Math.sin(a) * sp], i * 3);
-  }
-  const geo = new T.BufferGeometry();
-  geo.setAttribute("position", new T.BufferAttribute(pos, 3));
-  const mat = new T.PointsMaterial({
-    color, size: 4.2, transparent: true, opacity: 0.95,
-    blending: T.AdditiveBlending, depthWrite: false,
-  });
-  const pts = new T.Points(geo, mat);
-  renderer.scene.add(pts);
-  bursts.push({ pts, geo, mat, vel, t: 0, max: 0.7 });
+  vfx.burst(x, y, 14, { color, count: n, speed: 75, up: 55, gravity: 190, life: 0.7, size: 4.2 });
 }
 
 const btnRestart = document.getElementById("btn-restart")! as HTMLButtonElement;
@@ -790,6 +787,21 @@ world.events.on("boss:lunge:windup", (p: any) => {
 });
 world.events.on("boss:lunge", () => {
   renderer.shake = Math.min(12, renderer.shake + 7);
+});
+// danger circles: pulsing ground flash across the fuse, blast on detonation
+world.events.on("area:telegraph", (p: any) => {
+  flashAt(p.x, p.y, 0xff5d45, 15000, p.duration ?? 0.9);
+  if (p.source === boss) typeRibbon("…the ground SCREAMS. Move!");
+});
+world.events.on("area:hit", (p: any) => {
+  flashAt(p.x, p.y, 0xffa040, 60000, 0.5);
+  burstAt(p.x, p.y, 0xff8c42, 24);
+  renderer.shake = Math.min(12, renderer.shake + 6);
+});
+world.events.on("item:used", (p: any) => {
+  if (p.entity !== hero) return;
+  if (p.stats?.heal) typeRibbon("…warmth returns. (+" + p.stats.heal + ")");
+  if (p.stats?.buffDamage) typeRibbon("…FURY. Your blade burns. (" + (p.stats.buffDuration ?? 6) + "s)");
 });
 world.events.on("spawn:telegraph", (p: any) => {
   const color = p.kind === "sentinel" ? 0x6fe8b8 : p.kind === "chanter" ? 0xb06df0 : 0x7aa35a;
@@ -980,25 +992,7 @@ function renderFrame(alpha: number) {
     f.light.intensity = f.base * k * k;
     if (f.t >= f.max) f.light.intensity = 0; // slot free (light stays in scene)
   }
-  for (let i = bursts.length - 1; i >= 0; i--) {
-    const b = bursts[i];
-    b.t += dt;
-    const pos = b.geo.attributes.position;
-    for (let k = 0; k < b.vel.length / 3; k++) {
-      pos.array[k * 3] += b.vel[k * 3] * dt;
-      pos.array[k * 3 + 1] += b.vel[k * 3 + 1] * dt;
-      pos.array[k * 3 + 2] += b.vel[k * 3 + 2] * dt;
-      b.vel[k * 3 + 1] -= 190 * dt; // gravity
-    }
-    pos.needsUpdate = true;
-    b.mat.opacity = 0.95 * Math.max(0, 1 - b.t / b.max);
-    if (b.t >= b.max) {
-      renderer.scene.remove(b.pts);
-      b.geo.dispose();
-      b.mat.dispose();
-      bursts.splice(i, 1);
-    }
-  }
+  // particles advance in renderer.onFrame (engine ParticlePool)
   renderer.shake = Math.max(0, renderer.shake - dt * 22);
 
   // click-to-move destination ping
@@ -1054,8 +1048,7 @@ function resetAfterLoad() {
     f.light.intensity = 0;
     f.t = f.max;
   }
-  for (const b of bursts) { renderer.scene.remove(b.pts); b.geo.dispose(); b.mat.dispose(); }
-  bursts.length = 0;
+  // ParticlePool slots expire on their own (pooled — nothing to tear down)
   for (const e of hitFx.keys()) renderer.objectOf(e)?.scale.setScalar(1);
   hitFx.clear();
   hitScaled.clear();
@@ -1113,6 +1106,9 @@ exposeAgentPort(agentPort);
 if (["localhost", "127.0.0.1"].includes(location.hostname)) {
   connectAgentBridge(agentPort);
 }
+// the engine's "editor": F2 opens the live inspector (entities, components,
+// verb console, pause/step) — alt+click any model to select it
+attachInspector({ world, actions, loop, renderer });
 
 loop.start();
 

@@ -21,8 +21,10 @@ export function playerDriveSystem(): System {
         const v = world.require(e, Velocity);
         const active = pc.moveX !== 0 || pc.moveY !== 0;
         if (active) {
-          v.vx = pc.moveX * v.maxSpeed;
-          v.vy = pc.moveY * v.maxSpeed;
+          // movementSystem clamps to maxSpeed * speed-buff; write generously
+          // so haste items actually speed the player up
+          v.vx = pc.moveX * v.maxSpeed * 2;
+          v.vy = pc.moveY * v.maxSpeed * 2;
         } else {
           const b = world.get(e, Behavior);
           if (!b || b.mode === "idle") {
@@ -103,6 +105,7 @@ export class TopDownControls {
   private pendingClick: { x: number; y: number } | null = null;
   private lastMoveX = 0;
   private lastMoveY = 0;
+  private hotbarQueued = -1;
 
   constructor(opts: TopDownControlsOptions) {
     this.opts = opts;
@@ -122,6 +125,8 @@ export class TopDownControls {
       } else if (actionKeys.includes(k)) {
         e.preventDefault();
         this.queueAction();
+      } else if (k >= "1" && k <= "9") {
+        this.hotbarQueued = k.charCodeAt(0) - 49; // hotbar slot, fired in-tick
       }
     };
     const onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.key.toLowerCase());
@@ -229,6 +234,16 @@ export class TopDownControls {
           const p = this.pendingClick;
           this.pendingClick = null;
           this.handleClick(p);
+        }
+        // hotbar (keys 1-9): use_item by Hotbar slot — a verb, so Minds,
+        // agents, and replays all share the same path
+        if (this.hotbarQueued >= 0) {
+          const slot = this.hotbarQueued;
+          this.hotbarQueued = -1;
+          const av = this.opts.avatar();
+          const hb = world.isAlive(av) ? world.getNamed(av, "Hotbar") : undefined;
+          const item = hb?.slots?.[slot];
+          if (item) this.opts.actions.execute(world, { actor: av, verb: "use_item", params: { item } });
         }
         // buffered inputs retry until they land or the window closes
         if (this.actionBuf > 0) {

@@ -1,4 +1,8 @@
 import * as THREE from "three";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import type { World } from "../core/ecs.js";
 import { Sprite, Transform, Velocity } from "../components.js";
 import type { Renderer } from "../render/renderer.js";
@@ -97,6 +101,33 @@ export interface ModelContext {
 
 export type ModelFactory = (ctx: ModelContext) => THREE.Object3D;
 
+export interface BloomOptions {
+  /** Bloom intensity. Default 0.55. */
+  strength?: number;
+  /** Blur spread. Default 0.3. */
+  radius?: number;
+  /** Luminance above which pixels bloom. Default 0.85. */
+  threshold?: number;
+}
+
+/**
+ * Normalize the `bloom` constructor option: falsy → null (off), `true` →
+ * defaults, object → defaults + overrides. Defaults are tuned for our
+ * emissive-heavy low-poly scenes — bloom should accent orbs/eyes/flashes,
+ * not white out the arena.
+ */
+export function resolveBloom(
+  bloom: boolean | BloomOptions | undefined,
+): Required<BloomOptions> | null {
+  if (!bloom) return null;
+  const o = bloom === true ? {} : bloom;
+  return {
+    strength: o.strength ?? 0.55,
+    radius: o.radius ?? 0.3,
+    threshold: o.threshold ?? 0.85,
+  };
+}
+
 export interface ThreeRendererOptions {
   /** Scene background / fog color. */
   clearColor?: number;
@@ -105,6 +136,11 @@ export interface ThreeRendererOptions {
   cameraDistance?: number;
   cameraHeight?: number;
   shadows?: boolean;
+  /**
+   * Opt-in bloom post-processing (UnrealBloomPass). `true` = tuned defaults;
+   * pass an object to override. Default OFF — plain `gl.render` path.
+   */
+  bloom?: boolean | BloomOptions;
 }
 
 export class ThreeRenderer implements Renderer {
@@ -130,6 +166,9 @@ export class ThreeRenderer implements Renderer {
   private lastDrawMs = 0;
   private opts: Required<Pick<ThreeRendererOptions, "cameraDistance" | "cameraHeight">> &
     ThreeRendererOptions;
+  /** Post-processing chain — only exists when opts.bloom is enabled. */
+  private composer?: EffectComposer;
+  private composerPasses: { dispose(): void }[] = [];
 
   constructor(readonly container: HTMLElement, opts: ThreeRendererOptions = {}) {
     this.opts = { cameraDistance: 260, cameraHeight: 210, ...opts };
@@ -154,6 +193,28 @@ export class ThreeRenderer implements Renderer {
     );
     this.camera.position.set(0, this.opts.cameraHeight, this.opts.cameraDistance);
     this.camera.lookAt(0, 0, 0);
+
+    // Opt-in bloom: render through an EffectComposer instead of gl.render.
+    // The final OutputPass renders to the SAME canvas (tone mapping + sRGB
+    // now happen there instead of in the direct-to-screen path), so
+    // capture()/project/groundPoint/entityAt are untouched and the
+    // preserveDrawingBuffer readback keeps working.
+    const bloom = resolveBloom(opts.bloom);
+    if (bloom) {
+      this.composer = new EffectComposer(this.gl);
+      const renderPass = new RenderPass(this.scene, this.camera);
+      const bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(container.clientWidth, container.clientHeight),
+        bloom.strength,
+        bloom.radius,
+        bloom.threshold,
+      );
+      const outputPass = new OutputPass();
+      this.composer.addPass(renderPass);
+      this.composer.addPass(bloomPass);
+      this.composer.addPass(outputPass);
+      this.composerPasses = [renderPass, bloomPass, outputPass];
+    }
   }
 
   defineModel(kind: string, factory: ModelFactory): this {
@@ -163,6 +224,7 @@ export class ThreeRenderer implements Renderer {
 
   resize(width: number, height: number): void {
     this.gl.setSize(width, height);
+    this.composer?.setSize(width, height); // resizes buffers + every pass
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
   }
@@ -278,7 +340,8 @@ export class ThreeRenderer implements Renderer {
     this.camera.lookAt(this.lookAt);
 
     this.onFrame?.(world.time);
-    this.gl.render(this.scene, this.camera);
+    if (this.composer) this.composer.render();
+    else this.gl.render(this.scene, this.camera);
   }
 
   /**
@@ -315,6 +378,10 @@ export class ThreeRenderer implements Renderer {
     this.objects.clear();
     this.xf.clear();
     this.scene.clear();
+    for (const pass of this.composerPasses) pass.dispose();
+    this.composerPasses = [];
+    this.composer?.dispose(); // frees the composer's internal render targets
+    this.composer = undefined;
     this.gl.dispose();
     this.gl.forceContextLoss();
     this.gl.domElement.remove();

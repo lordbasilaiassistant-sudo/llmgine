@@ -27,3 +27,6 @@ export * from "./render/index.js";
 
 // agent play protocol — LLM agents pilot/test/debug games first-class
 export * from "./agent/index.js";
+
+// devtools — live in-game inspector overlay (browser only; import-safe headless)
+export * from "./devtools/index.js";
