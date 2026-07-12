@@ -332,6 +332,74 @@ describe("spatial grid pruning (#14)", () => {
   });
 });
 
+describe("facing + jump — engine guarantees (no game can ship these broken)", () => {
+  it("movement sets facing; standing attackers face their target", () => {
+    const world = new World(1);
+    const grid = new SpatialGrid();
+    world.addSystem(behaviorSystem()).addSystem(movementSystem(grid)).addSystem(combatSystem());
+    const a = world.create();
+    world.add(a, Transform, { x: 0, y: 0 });
+    world.add(a, Velocity, { vx: 0, vy: 100, maxSpeed: 100 });
+    world.step(1 / 60);
+    expect(world.require(a, Transform).rot).toBeCloseTo(Math.PI / 2); // faces +y while moving
+    // standing in attack range: face the target even with zero velocity
+    world.require(a, Velocity).vy = 0;
+    world.add(a, Attack, { range: 100 });
+    world.add(a, Behavior, { mode: "attack", target: 0 });
+    const foe = world.create();
+    world.add(foe, Transform, { x: -50, y: 0 });
+    world.add(foe, Health, {});
+    world.require(a, Behavior).target = foe;
+    world.step(1 / 60);
+    expect(Math.abs(world.require(a, Transform).rot)).toBeCloseTo(Math.PI, 1); // faces -x toward foe
+  });
+
+  it("jump verb: launches, arcs under gravity, lands with an event, no double-jump", () => {
+    const world = new World(1);
+    const grid = new SpatialGrid();
+    const actions = registry();
+    world.addSystem(actionSystem(actions)).addSystem(movementSystem(grid));
+    const e = world.create();
+    world.add(e, Transform, {});
+    world.add(e, Velocity, {});
+    expect(actions.execute(world, { actor: e, verb: "jump", params: {} }).ok).toBe(true);
+    world.step(1 / 60);
+    const t = world.require(e, Transform);
+    expect(t.z).toBeGreaterThan(0); // airborne
+    const mid = actions.execute(world, { actor: e, verb: "jump", params: {} });
+    expect(mid.ok).toBe(false); // no double-jump
+    expect(mid.error).toContain("airborne");
+    let landed = false;
+    world.events.on("jump:landed", (p: any) => p.entity === e && (landed = true));
+    new GameLoop(world).advance(90); // 1.5s ≫ full arc
+    expect(world.require(e, Transform).z).toBe(0);
+    expect(landed).toBe(true);
+  });
+
+  it("airborne entities dodge melee and projectiles", () => {
+    const world = new World(1);
+    const grid = new SpatialGrid();
+    const actions = registry();
+    world.addSystem(actionSystem(actions)).addSystem(behaviorSystem()).addSystem(movementSystem(grid))
+      .addSystem(projectileSystem(grid)).addSystem(combatSystem());
+    const jumper = world.create();
+    world.add(jumper, Transform, { x: 30, y: 0, z: 30 }); // mid-jump
+    world.add(jumper, Velocity, { vz: 100 });
+    world.add(jumper, Health, { hp: 50, maxHp: 50 });
+    world.add(jumper, Collider, { radius: 10 });
+    const bruiser = world.create();
+    world.add(bruiser, Transform, { x: 0, y: 0 });
+    world.add(bruiser, Velocity, {});
+    world.add(bruiser, Attack, { range: 60, damage: 10, cooldown: 0.1 });
+    world.add(bruiser, Behavior, { mode: "attack", target: jumper });
+    world.add(bruiser, Ranged, { speed: 800, range: 300, damage: 10, cooldown: 0.1 });
+    actions.execute(world, { actor: bruiser, verb: "shoot", params: { target: jumper } });
+    world.step(1 / 60);
+    world.step(1 / 60);
+    expect(world.require(jumper, Health).hp).toBe(50); // swing + bolt both passed beneath
+  });
+});
+
 describe("behavior repath throttle (#20)", () => {
   it("an unreachable goal does not re-run A* every tick", () => {
     const nav = new NavGrid(32);

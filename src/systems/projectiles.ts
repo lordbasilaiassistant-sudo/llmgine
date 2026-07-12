@@ -2,7 +2,7 @@ import { defineComponent } from "../core/ecs.js";
 import type { System } from "../core/ecs.js";
 import type { VerbDef } from "../core/actions.js";
 import type { SpatialGrid } from "../core/spatial.js";
-import { Collider, Faction, Health, Sprite, Transform, Velocity } from "../components.js";
+import { Collider, DODGE_HEIGHT, Faction, Health, Sprite, Transform, Velocity } from "../components.js";
 import { dealDamage } from "./combat.js";
 
 /**
@@ -143,6 +143,7 @@ export function projectileSystem(grid: SpatialGrid, nav?: import("../core/nav.js
           const oh = world.get(other, Health);
           const ot = world.get(other, Transform);
           if (!oh || oh.hp <= 0 || !ot) continue;
+          if ((ot.z ?? 0) > DODGE_HEIGHT) continue; // jumped over it
           if (p.faction && world.get(other, Faction)?.id === p.faction) continue; // no friendly fire
           const reach = p.hitRadius + (world.get(other, Collider)?.radius ?? 8);
           const [dist, u] = segDist(px, py, t.x, t.y, ot.x, ot.y);

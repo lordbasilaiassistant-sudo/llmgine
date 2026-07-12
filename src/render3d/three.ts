@@ -206,13 +206,14 @@ export class ThreeRenderer implements Renderer {
         rec = { obj, kind: s.kind };
         this.objects.set(e, rec);
       }
-      this.xf.sample(e, t.x, t.y, t.rot);
-      const ip = this.xf.at(e, alpha) ?? t;
-      rec.obj.position.set(ip.x, 0, ip.y);
+      this.xf.sample(e, t.x, t.y, t.rot, (t as any).z ?? 0);
+      const ip = this.xf.at(e, alpha) ?? { ...t, z: (t as any).z ?? 0 };
+      rec.obj.position.set(ip.x, ip.z, ip.y); // Transform.z = height (jump arcs)
       // sim rot (radians, 0 = +x, toward +y) → Y rotation on the ground plane
-      // (x→X, y→Z). Models authored facing +X need rotation.y = -rot; gltf
-      // models that steer themselves from Velocity have rot = 0 (unaffected).
-      rec.obj.rotation.y = -ip.rot;
+      // (x→X, y→Z). Models authored facing +X need rotation.y = -rot. A model
+      // factory that steers its own rig sets obj.userData.selfRotate = true
+      // to opt out (otherwise root+rig would double-rotate).
+      if (!rec.obj.userData.selfRotate) rec.obj.rotation.y = -ip.rot;
       const anim = rec.obj.userData.animate as
         | ((time: number, world: World, e: number) => void)
         | undefined;

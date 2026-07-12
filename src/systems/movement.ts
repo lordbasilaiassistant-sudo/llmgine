@@ -9,8 +9,15 @@ export interface WorldBounds {
   maxY: number;
 }
 
-/** Integrates velocity into position, clamps to bounds, maintains the spatial grid. */
-export function movementSystem(grid: SpatialGrid, bounds?: WorldBounds): System {
+export interface MovementOptions {
+  /** Vertical gravity for jump arcs, units/s². Default 780. */
+  gravity?: number;
+}
+
+/** Integrates velocity into position (incl. jump arcs), sets facing from
+ * movement, clamps to bounds, maintains the spatial grid. */
+export function movementSystem(grid: SpatialGrid, bounds?: WorldBounds, opts: MovementOptions = {}): System {
+  const gravity = opts.gravity ?? 780;
   let wired: unknown = null;
   return {
     name: "movement",
@@ -36,6 +43,20 @@ export function movementSystem(grid: SpatialGrid, bounds?: WorldBounds): System 
         }
         t.x += v.vx * dt;
         t.y += v.vy * dt;
+        // facing is an ENGINE guarantee: anything that moves looks where it
+        // goes (combat/behavior face targets when standing) — renderers read
+        // rot, so no game can ship characters that animate the wrong way
+        if (speed > 1) t.rot = Math.atan2(v.vy, v.vx);
+        // vertical: jump arc, deterministic gravity, ground at z = 0
+        if ((t.z ?? 0) > 0 || (v.vz ?? 0) !== 0) {
+          t.z = (t.z ?? 0) + v.vz * dt;
+          v.vz -= gravity * dt;
+          if (t.z <= 0) {
+            t.z = 0;
+            v.vz = 0;
+            world.events.emit("jump:landed", { entity: e });
+          }
+        }
         if (bounds) {
           t.x = Math.min(Math.max(t.x, bounds.minX), bounds.maxX);
           t.y = Math.min(Math.max(t.y, bounds.minY), bounds.maxY);

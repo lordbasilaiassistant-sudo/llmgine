@@ -132,6 +132,9 @@ export function behaviorSystem(nav?: NavGrid): System {
             else {
               v.vx = 0;
               v.vy = 0;
+              // standing in range: face the target (movement only sets rot
+              // while moving — swings must never point away from the enemy)
+              t.rot = Math.atan2(targetT.y - t.y, targetT.x - t.x);
             }
             break;
           }

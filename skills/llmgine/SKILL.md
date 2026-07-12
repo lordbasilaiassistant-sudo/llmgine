@@ -59,6 +59,25 @@ Or in the browser console / via browser automation: `llmgine.observe()`, `llmgin
 your playtest is reproducible. Headless (no browser): use the MCP server (`.mcp.json` in the repo,
 tools: create_world/define_prefab/spawn/attach_mind/act/run/query_world/save_world/load_world).
 
+## Engine guarantees (rely on these; never re-implement them per game)
+
+- **Facing**: `Transform.rot` is set by the sim — movement faces where you
+  walk, combat/behavior face the target when standing. Renderers apply it.
+  Model factories that steer their own rig set `obj.userData.selfRotate = true`
+  (else the root double-rotates). Swing/attack animations must animate TOWARD
+  the rig's forward — derive phase from `1 - atk.ready/atk.cooldown` (raw
+  `ready` decays and plays your animation backwards).
+- **Jump**: standard `jump` verb + `Transform.z` / `Velocity.vz` gravity arc
+  (movementSystem). Airborne above `DODGE_HEIGHT` (14) dodges melee and
+  projectiles — a real mechanic in every game by default. Space in
+  `TopDownControls` triggers it.
+- **Controls**: `TopDownControls` = WASD/stick direct, click ground to move
+  (NavGrid-routed), click enemy to attack, Space jump, F action. Remap per
+  game via `keyMap`/`actionKeys`/`jumpKeys` — but never ship a game without
+  intuitive defaults.
+- **Perf**: never add/remove lights at runtime (three.js recompiles every
+  shader when the light COUNT changes) — pool them at init with intensity 0.
+
 ## Gotchas ledger (each one cost a real debugging session)
 
 - **GLM flash is a reasoning model**: without `thinking:{type:"disabled"}` content comes back

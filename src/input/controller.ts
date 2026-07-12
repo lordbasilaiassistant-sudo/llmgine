@@ -14,7 +14,9 @@ import { GamepadInput } from "./gamepad.js";
  *   click / tap on the ground   — move there (routes around obstacles via
  *                                 the move_to verb → NavGrid pathing)
  *   click / tap on an enemy     — attack it (chase into range via verb)
- *   Space / pad A / right zone  — primary action (game-defined)
+ *   Space                       — jump (the standard `jump` verb; falls back
+ *                                 to the primary action if jump isn't registered)
+ *   F / right touch zone        — primary action (game-defined)
  *
  * Direct input cancels click-to-move; releasing the keys mid-goto lets the
  * pathing finish. Everything indirect goes through the verb pipeline, so
@@ -40,6 +42,10 @@ export interface TopDownControlsOptions {
   attackRadius?: number;
   /** Custom movement keys (lowercase `key` values) — defaults WASD + arrows. */
   keyMap?: { up: string[]; down: string[]; left: string[]; right: string[] };
+  /** Keys that fire the primary action. Default ["f"]. */
+  actionKeys?: string[];
+  /** Keys that jump. Default [" "] (Space). */
+  jumpKeys?: string[];
   /** Element for pointer events. Default: window (canvas clicks only). */
   clickTarget?: HTMLElement | Window;
 }
@@ -62,10 +68,16 @@ export class TopDownControls {
     this.opts = opts;
     this.km = opts.keyMap ?? DEFAULT_KEYS;
 
+    const actionKeys = opts.actionKeys ?? ["f"];
+    const jumpKeys = opts.jumpKeys ?? [" "];
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      this.keys.add(e.key.toLowerCase());
-      if (e.key === " ") {
+      const k = e.key.toLowerCase();
+      this.keys.add(k);
+      if (jumpKeys.includes(e.key) || jumpKeys.includes(k)) {
+        e.preventDefault();
+        this.jump();
+      } else if (actionKeys.includes(k)) {
         e.preventDefault();
         this.opts.onAction?.();
       }
@@ -92,6 +104,15 @@ export class TopDownControls {
   /** Where the last click-to-move order landed (for a destination marker VFX). */
   get destination(): { x: number; y: number; t: number } | null {
     return this.moveMarker;
+  }
+
+  /** Jump via the standard verb; primary action if jump isn't registered. */
+  jump(): void {
+    const { world, actions } = this.opts;
+    const avatar = this.opts.avatar();
+    if (!world.isAlive(avatar)) return;
+    const res = actions.execute(world, { actor: avatar, verb: "jump", params: {} });
+    if (!res.ok && res.error?.startsWith("unknown verb")) this.opts.onAction?.();
   }
 
   private handleClick(cx: number, cy: number): void {

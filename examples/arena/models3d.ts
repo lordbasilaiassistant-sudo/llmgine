@@ -5,20 +5,38 @@
  */
 import * as THREE from "three";
 import type { ModelContext, ThreeRenderer } from "../../src/render3d/three.js";
-import { Attack, Mind, Pickup, Velocity, type World } from "../../src/index.js";
+import { Attack, Mind, Pickup, Transform, Velocity, type World } from "../../src/index.js";
 
+/**
+ * Swing envelope: 0 at rest → whips to 1 right after the hit lands → settles.
+ * (`ready` DECAYS from cooldown to 0 — using it raw plays the swing in
+ * reverse, which is exactly the "sword swings backwards" bug.)
+ */
 const swingOf = (world: World, e: number) => {
   const atk = world.get(e, Attack);
-  return !atk || atk.ready <= 0 ? 0 : Math.max(0, atk.ready / atk.cooldown);
+  if (!atk || atk.ready <= 0 || atk.cooldown <= 0) return 0;
+  const p = 1 - atk.ready / atk.cooldown; // 0 → 1 across the cooldown
+  return Math.sin(Math.min(1, p * 3) * Math.PI); // fast forward whip, smooth recovery
 };
 const speedOf = (world: World, e: number) => {
   const v = world.get(e, Velocity);
   return v ? Math.hypot(v.vx, v.vy) : 0;
 };
+/**
+ * Rig Y-rotation from the ENGINE's facing (Transform.rot — set by movement,
+ * combat and behavior, so standing strikes face their target too). Models
+ * are authored facing +Z; shortest-path smoothing so turns never spin the
+ * long way. Factories that use this set `selfRotate` so the renderer's
+ * root rotation doesn't double up.
+ */
 const headingOf = (world: World, e: number, prev: number) => {
-  const v = world.get(e, Velocity);
-  if (v && Math.hypot(v.vx, v.vy) > 8) return Math.atan2(v.vx, v.vy);
-  return prev;
+  const t = world.get(e, Transform);
+  if (!t) return prev;
+  const target = Math.atan2(Math.cos(t.rot), Math.sin(t.rot));
+  let d = (target - prev) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return prev + d * 0.28;
 };
 
 const std = (color: number | string, opts: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
@@ -89,6 +107,7 @@ export function gladiator({ world, entity }: ModelContext): THREE.Object3D {
   rig.add(arm);
 
   let heading = 0;
+  g.userData.selfRotate = true; // the rig steers itself from Transform.rot
   g.userData.animate = (time: number, world: World, e: number) => {
     heading = headingOf(world, e, heading);
     rig.rotation.y = heading;
@@ -96,9 +115,13 @@ export function gladiator({ world, entity }: ModelContext): THREE.Object3D {
     const walk = sp > 8 ? Math.sin(time * 12) : 0;
     legL.rotation.x = walk * 0.7;
     legR.rotation.x = -walk * 0.7;
-    rig.position.y = Math.abs(walk) * 1.2 + Math.sin(time * 2.1) * 0.4;
-    const s = swingOf(world, e);
-    arm.rotation.x = -0.3 - s * s * 2.2;
+    const air = (world.get(e, Transform)?.z ?? 0) > 1;
+    rig.position.y = air ? 0 : Math.abs(walk) * 1.2 + Math.sin(time * 2.1) * 0.4;
+    if (air) { legL.rotation.x = 0.6; legR.rotation.x = -0.4; } // tucked jump pose
+    // forward slash: +X arm rotation drives the blade toward the rig's +Z
+    // facing — never away from it
+    const whip = swingOf(world, e);
+    arm.rotation.x = -0.3 + whip * 2.0;
   };
   return g;
 }
@@ -197,6 +220,7 @@ export function arenaMaster({ world, entity }: ModelContext): THREE.Object3D {
   g.add(glow);
 
   let heading = Math.PI;
+  g.userData.selfRotate = true;
   g.userData.animate = (time: number, world: World, e: number) => {
     heading = headingOf(world, e, heading);
     rig.rotation.y = heading;
@@ -209,8 +233,10 @@ export function arenaMaster({ world, entity }: ModelContext): THREE.Object3D {
     eyeMat.emissiveIntensity = thinking ? 4 : 2.2;
     eyeMat.emissive.setHex(thinking ? 0xffd166 : 0xff5d45);
     glow.intensity = 5500 + pulse * 2200;
-    const s = swingOf(world, e);
-    arm.rotation.z = 0.2 - s * s * 1.9;
+    // claw swipe sweeps from the side INTO the facing direction (+Z)
+    const whip = swingOf(world, e);
+    arm.rotation.y = -whip * 1.5;
+    arm.rotation.z = 0.2 + whip * 0.4;
   };
   return g;
 }
@@ -251,13 +277,16 @@ export function goblinModel({ world, entity }: ModelContext): THREE.Object3D {
   rig.add(armG);
 
   let heading = 0;
+  g.userData.selfRotate = true;
   g.userData.animate = (time: number, world: World, e: number) => {
     heading = headingOf(world, e, heading);
     rig.rotation.y = heading;
     const sp = speedOf(world, e);
     rig.position.y = sp > 8 ? Math.abs(Math.sin(time * 15 + e)) * 2 : Math.sin(time * 3 + e) * 0.5;
-    const s = swingOf(world, e);
-    armG.rotation.z = 0.2 - s * s * 1.8;
+    // dagger stab: thrust toward facing (+Z), not a sideways flail
+    const whip = swingOf(world, e);
+    armG.rotation.y = -whip * 1.2;
+    armG.position.z = 2 + whip * 3.5;
   };
   return g;
 }

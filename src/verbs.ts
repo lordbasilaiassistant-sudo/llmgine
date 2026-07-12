@@ -127,6 +127,24 @@ export const stopVerb: VerbDef = {
   },
 };
 
+export const jumpVerb: VerbDef = {
+  name: "jump",
+  description: "Jump — a brief airborne moment; melee swings and projectiles pass beneath you.",
+  params: { strength: { type: "number", description: "Launch speed, 60–600 (default 240)" } },
+  validate: (w, a) => {
+    if (!w.has(a.actor, Velocity)) return "you cannot jump (no Velocity)";
+    const t = w.get(a.actor, Transform);
+    if (!t) return "you cannot jump (no Transform)";
+    if ((t.z ?? 0) > 0) return "already airborne";
+    return null;
+  },
+  resolve: (w, a) => {
+    const v = w.require(a.actor, Velocity);
+    v.vz = Math.min(600, Math.max(60, Number(a.params.strength ?? 240)));
+    w.events.emit("jump", { entity: a.actor });
+  },
+};
+
 export const pickupVerb: VerbDef = {
   name: "pickup",
   description: "Pick up a nearby item lying in the world.",
@@ -170,5 +188,6 @@ export const STANDARD_VERBS: VerbDef[] = [
   attackVerb,
   fleeVerb,
   stopVerb,
+  jumpVerb,
   pickupVerb,
 ];

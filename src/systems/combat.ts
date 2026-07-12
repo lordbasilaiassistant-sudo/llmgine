@@ -1,5 +1,5 @@
 import type { Entity, System, World } from "../core/ecs.js";
-import { Attack, Behavior, Faction, Health, Named, Transform } from "../components.js";
+import { Attack, Behavior, DODGE_HEIGHT, Faction, Health, Named, Transform } from "../components.js";
 
 /**
  * Combat — deterministic core. Melee attacks resolve when an attacker in
@@ -69,7 +69,10 @@ export function combatSystem(): System {
         const tt = world.get(b.target, Transform);
         if (!tt) continue;
         if (Math.hypot(tt.x - t.x, tt.y - t.y) <= atk.range) {
+          // a jumping target is out of the swing plane — jump is a dodge
+          if ((tt.z ?? 0) > DODGE_HEIGHT) continue;
           atk.ready = atk.cooldown;
+          t.rot = Math.atan2(tt.y - t.y, tt.x - t.x); // face what you hit
           world.events.emit("combat:swing", { entity: e, target: b.target });
           dealDamage(world, e, b.target, atk.damage);
         }

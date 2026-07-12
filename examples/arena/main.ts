@@ -68,10 +68,15 @@ actions.register({
       const ot = w.get(e, Transform);
       const oh = w.get(e, Health);
       if (!ot || !oh || oh.hp <= 0) continue;
+      if ((ot.z ?? 0) > 14) continue; // airborne targets dodge the swing
       const d = Math.hypot(ot.x - t.x, ot.y - t.y);
       if (d < bestD) { bestD = d; best = e; }
     }
     atk.ready = atk.cooldown;
+    if (best) {
+      const bt = w.require(best, Transform);
+      t.rot = Math.atan2(bt.y - t.y, bt.x - t.x); // face what you strike
+    }
     w.events.emit("combat:swing", { entity: a.actor, target: best });
     if (best) dealDamage(w, a.actor, best, atk.damage);
   },
@@ -327,10 +332,17 @@ function playerStrike() {
 }
 
 const touch = new TouchControls(document.body, { onAction: () => playerStrike() });
-const gamepad = new GamepadInput({ buttons: { 0: () => playerStrike(), 7: () => playerStrike() } });
+const gamepad = new GamepadInput({
+  buttons: {
+    0: () => controls.jump(), // A — jump
+    2: () => playerStrike(), // X — strike
+    7: () => playerStrike(), // RT — strike
+  },
+});
 
 // Standard controls: WASD/stick direct, click ground = walk there (NavGrid
-// routes around pillars), click an enemy = attack it, Space/pad A = strike.
+// routes around pillars), click an enemy = attack it, SPACE = jump (dodges
+// swings and hellfire), F = strike.
 const controls = new TopDownControls({
   world,
   actions,

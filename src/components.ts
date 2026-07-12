@@ -9,8 +9,11 @@ import { defineComponent } from "./core/ecs.js";
 export const Transform = defineComponent("Transform", () => ({
   x: 0,
   y: 0,
-  /** Radians. 0 = +x. */
+  /** Facing, radians. 0 = +x. Set automatically from movement/attacks —
+   * renderers use it, so characters always face what they're doing. */
   rot: 0,
+  /** Height above the ground plane (jump arcs). 0 = grounded. */
+  z: 0,
 }));
 
 export const Velocity = defineComponent("Velocity", () => ({
@@ -18,7 +21,13 @@ export const Velocity = defineComponent("Velocity", () => ({
   vy: 0,
   /** Max speed in units/sec; movement systems clamp to this. */
   maxSpeed: 120,
+  /** Vertical speed (jumping) — integrated with gravity by movementSystem. */
+  vz: 0,
 }));
+
+/** Airborne entities above this height are missed by melee and projectiles —
+ * jumping is a real dodge, in every game, by default. */
+export const DODGE_HEIGHT = 14;
 
 export const Collider = defineComponent("Collider", () => ({
   /** Circle collider radius. */

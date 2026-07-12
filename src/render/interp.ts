@@ -23,9 +23,11 @@ interface XformPair {
   px: number;
   py: number;
   prot: number;
+  pz: number;
   cx: number;
   cy: number;
   crot: number;
+  cz: number;
 }
 
 export class TransformLerp {
@@ -35,30 +37,33 @@ export class TransformLerp {
   constructor(private snapDistance = 120) {}
 
   /** Feed the entity's current sim transform. Call once per entity per draw. */
-  sample(e: number, x: number, y: number, rot: number): void {
+  sample(e: number, x: number, y: number, rot: number, z = 0): void {
     const s = this.states.get(e);
     if (!s) {
-      this.states.set(e, { px: x, py: y, prot: rot, cx: x, cy: y, crot: rot });
+      this.states.set(e, { px: x, py: y, prot: rot, pz: z, cx: x, cy: y, crot: rot, cz: z });
       return;
     }
-    if (s.cx === x && s.cy === y && s.crot === rot) return; // same tick — keep the pair
+    if (s.cx === x && s.cy === y && s.crot === rot && s.cz === z) return; // same tick — keep the pair
     const snap = Math.hypot(x - s.cx, y - s.cy) > this.snapDistance;
     s.px = snap ? x : s.cx;
     s.py = snap ? y : s.cy;
     s.prot = snap ? rot : s.crot;
+    s.pz = snap ? z : s.cz;
     s.cx = x;
     s.cy = y;
     s.crot = rot;
+    s.cz = z;
   }
 
   /** Interpolated transform, or undefined if the entity was never sampled. */
-  at(e: number, alpha: number): { x: number; y: number; rot: number } | undefined {
+  at(e: number, alpha: number): { x: number; y: number; rot: number; z: number } | undefined {
     const s = this.states.get(e);
     if (!s) return undefined;
     return {
       x: lerp(s.px, s.cx, alpha),
       y: lerp(s.py, s.cy, alpha),
       rot: lerpAngle(s.prot, s.crot, alpha),
+      z: lerp(s.pz, s.cz, alpha),
     };
   }
 
