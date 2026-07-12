@@ -246,6 +246,17 @@ export class World {
     return this.store(type).has(e);
   }
 
+  /** Component check by NAME — for layers that shouldn't import the type
+   * (e.g. core behavior policies probing optional gameplay components). */
+  hasNamed(e: Entity, componentName: string): boolean {
+    return this.stores.get(componentName)?.has(e) ?? false;
+  }
+
+  /** Component data by NAME (undefined if absent). See hasNamed. */
+  getNamed(e: Entity, componentName: string): any {
+    return this.stores.get(componentName)?.get(e);
+  }
+
   remove(e: Entity, type: ComponentType<any>): void {
     this.store(type).delete(e);
   }

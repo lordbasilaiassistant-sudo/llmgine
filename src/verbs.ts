@@ -1,6 +1,6 @@
 import type { World } from "./core/ecs.js";
 import type { Action, VerbDef } from "./core/actions.js";
-import { Attack, Behavior, Faction, Inventory, Named, Pickup, Speech, Transform, Velocity } from "./components.js";
+import { Attack, Behavior, Faction, Inventory, Named, Pickup, PlayerControlled, Speech, Transform, Velocity } from "./components.js";
 
 /**
  * Standard verb library — the shared vocabulary of players, scripts, and
@@ -127,6 +127,42 @@ export const stopVerb: VerbDef = {
   },
 };
 
+export const moveVerb: VerbDef = {
+  name: "move",
+  description:
+    "Set the movement input vector (direction * magnitude, length ≤ 1). Emitted by input controllers on change; playerDriveSystem turns it into velocity each tick.",
+  params: {
+    x: { type: "number", description: "-1..1", required: true },
+    y: { type: "number", description: "-1..1", required: true },
+  },
+  validate: (w, a) => {
+    if (!w.has(a.actor, PlayerControlled)) return "not player-controlled";
+    if (!w.has(a.actor, Velocity)) return "cannot move (no Velocity)";
+    return null;
+  },
+  resolve: (w, a) => {
+    const pc = w.require(a.actor, PlayerControlled);
+    let x = Number(a.params.x);
+    let y = Number(a.params.y);
+    const m = Math.hypot(x, y);
+    if (m > 1) {
+      x /= m;
+      y /= m;
+    }
+    pc.moveX = x;
+    pc.moveY = y;
+    // direct input cancels any standing behavior order — the stick wins.
+    // Lives in the RESOLVER so replays reproduce it identically.
+    if (x !== 0 || y !== 0) {
+      const b = w.get(a.actor, Behavior);
+      if (b && b.mode !== "idle") {
+        b.mode = "idle";
+        b.target = 0;
+      }
+    }
+  },
+};
+
 export const jumpVerb: VerbDef = {
   name: "jump",
   description: "Jump — a brief airborne moment; melee swings and projectiles pass beneath you.",
@@ -185,6 +221,7 @@ export const pickupVerb: VerbDef = {
 export const STANDARD_VERBS: VerbDef[] = [
   sayVerb,
   emoteVerb,
+  moveVerb,
   moveToVerb,
   followVerb,
   attackVerb,

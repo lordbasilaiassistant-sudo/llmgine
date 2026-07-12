@@ -130,8 +130,10 @@ export const Speech = defineComponent("Speech", () => ({
 
 /** Simple deterministic wander/chase policy — also the Mind fallback. */
 export const Behavior = defineComponent("Behavior", () => ({
-  /** "idle" | "wander" | "chase" | "flee" */
+  /** "idle" | "wander" | "goto" | "chase" | "attack" | "skirmish" | "flee" */
   mode: "wander",
+  /** skirmish: hold this distance from the target (0 = derive from Ranged.range). */
+  preferredRange: 0,
   /** Perception radius for acquiring targets. */
   sightRange: 160,
   target: 0,

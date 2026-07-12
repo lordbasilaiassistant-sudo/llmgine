@@ -516,6 +516,49 @@ describe("combat feel — telegraphs, knockback, landing recovery", () => {
   });
 });
 
+describe("skirmish mode + ranged telegraphs", () => {
+  it("a ranged-only enemy acquires targets, holds its band, and fires through the verb gate", async () => {
+    const { Ranged, rangedCombatSystem } = await import("../systems/projectiles.js");
+    const world = new World(9);
+    const grid = new SpatialGrid();
+    const actions = registry();
+    world
+      .addSystem(actionSystem(actions))
+      .addSystem(aggroSystem())
+      .addSystem(behaviorSystem())
+      .addSystem(movementSystem(grid))
+      .addSystem(rangedCombatSystem(actions))
+      .addSystem(projectileSystem(grid));
+    const archer = world.create();
+    world.add(archer, Transform, { x: 0, y: 0 });
+    world.add(archer, Velocity, { maxSpeed: 100 });
+    world.add(archer, Behavior, { mode: "idle", sightRange: 400 });
+    world.add(archer, Health, {});
+    world.add(archer, Faction, { id: "beasts", hostileTo: ["heroes"] });
+    world.add(archer, Ranged, { damage: 6, speed: 500, range: 300, cooldown: 0.4, windup: 0.3 });
+    // NO Attack component — pre-fix, aggro could never acquire for this entity
+    const prey = world.create();
+    world.add(prey, Transform, { x: 120, y: 0 });
+    world.add(prey, Health, { hp: 60, maxHp: 60 });
+    world.add(prey, Collider, { radius: 10 });
+    world.add(prey, Faction, { id: "heroes", hostileTo: ["beasts"] });
+    let windups = 0;
+    world.events.on("combat:windup", (p: any) => p.kind === "ranged" && windups++);
+    new GameLoop(world).advance(240); // 4s
+    const b = world.require(archer, Behavior);
+    expect(b.mode).toBe("skirmish"); // acquired as a skirmisher, not melee
+    expect(windups).toBeGreaterThan(0); // shots are telegraphed
+    expect(world.require(prey, Health).hp).toBeLessThan(60); // and they land
+    const at = world.require(archer, Transform);
+    const d = Math.hypot(at.x - 120, at.y);
+    expect(d).toBeGreaterThan(100); // held its distance band (pref ≈ 180)
+    // verb-gated: the shots are in the action log, flagged internal
+    const shots = actions.log.filter((a) => a.verb === "shoot");
+    expect(shots.length).toBeGreaterThan(0);
+    expect(shots.every((s) => (s as any).internal)).toBe(true);
+  });
+});
+
 describe("behavior repath throttle (#20)", () => {
   it("an unreachable goal does not re-run A* every tick", () => {
     const nav = new NavGrid(32);

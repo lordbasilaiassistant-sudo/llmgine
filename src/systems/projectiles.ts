@@ -1,8 +1,8 @@
 import { defineComponent } from "../core/ecs.js";
 import type { System } from "../core/ecs.js";
-import type { VerbDef } from "../core/actions.js";
+import type { ActionRegistry, VerbDef } from "../core/actions.js";
 import type { SpatialGrid } from "../core/spatial.js";
-import { Collider, DODGE_HEIGHT, Faction, Health, Sprite, Transform, Velocity } from "../components.js";
+import { Behavior, Collider, DODGE_HEIGHT, Faction, Health, Sprite, Transform, Velocity } from "../components.js";
 import { dealDamage } from "./combat.js";
 
 /**
@@ -24,6 +24,11 @@ export const Ranged = defineComponent("Ranged", () => ({
   color: "#ffd166",
   /** Knockback impulse on hit, units/sec. */
   knockback: 90,
+  /** Telegraph before an AI shot (rangedCombatSystem): seconds of visible
+   * windup. 0 = fire instantly (bolt travel time is the reaction window). */
+  windup: 0,
+  /** Internal: seconds left in the current ranged windup. */
+  winding: 0,
 }));
 
 export const Projectile = defineComponent("Projectile", () => ({
@@ -99,6 +104,57 @@ export const shootVerb: VerbDef = {
     w.events.emit("combat:shot", { entity: a.actor, projectile: p, x: t.x, y: t.y });
   },
 };
+
+/**
+ * Deterministic ranged-combat policy: entities in `attack`/`skirmish` mode
+ * with a Ranged component fire through the SAME shoot verb as players and
+ * Minds (verb-gated, logged as internal — replays re-derive these shots).
+ * `Ranged.windup > 0` telegraphs the shot (combat:windup, kind "ranged")
+ * before firing — parity with melee readability. Pass a NavGrid to hold
+ * fire without line of sight (cover works for the defender too).
+ */
+export function rangedCombatSystem(actions: ActionRegistry, nav?: import("../core/nav.js").NavGrid): System {
+  return {
+    name: "ranged-combat",
+    order: 17, // with combat cadence, before projectile stepping
+    update({ world, dt }) {
+      for (const e of world.query(Behavior, Ranged, Transform)) {
+        const selfHp = world.get(e, Health);
+        if (selfHp && selfHp.hp <= 0) continue;
+        const r = world.require(e, Ranged);
+        const t = world.require(e, Transform);
+        // resolve an in-flight ranged windup
+        if (r.winding > 0) {
+          r.winding -= dt;
+          if (r.winding <= 0) {
+            r.winding = 0;
+            const b = world.require(e, Behavior);
+            if (world.isAlive(b.target)) {
+              actions.execute(world, { actor: e, verb: "shoot", params: { target: b.target } }, { internal: true });
+            }
+          }
+          continue;
+        }
+        const b = world.require(e, Behavior);
+        if (b.mode !== "skirmish" && b.mode !== "attack") continue;
+        if (!world.isAlive(b.target)) continue;
+        if (r.ready > 0) continue;
+        const tt = world.get(b.target, Transform);
+        if (!tt) continue;
+        const dist = Math.hypot(tt.x - t.x, tt.y - t.y);
+        if (dist > r.range) continue;
+        if (nav && !nav.lineClear(t.x, t.y, tt.x, tt.y)) continue; // no wallhacks
+        if (r.windup > 0) {
+          r.winding = r.windup;
+          t.rot = Math.atan2(tt.y - t.y, tt.x - t.x);
+          world.events.emit("combat:windup", { entity: e, target: b.target, duration: r.windup, kind: "ranged" });
+        } else {
+          actions.execute(world, { actor: e, verb: "shoot", params: { target: b.target } }, { internal: true });
+        }
+      }
+    },
+  };
+}
 
 /** Closest approach of point (cx,cy) to segment (ax,ay)→(bx,by); returns [dist, u]. */
 function segDist(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): [number, number] {

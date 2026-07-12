@@ -64,11 +64,19 @@ export class ActionRegistry {
     this.queue.push(action);
   }
 
-  /** Validate + resolve immediately (inside a tick, e.g. from input system). */
-  execute(world: World, action: Action): ActionResult {
+  /** Validate + resolve immediately (inside a tick, e.g. from input system).
+   * Pass `internal: true` for actions ORIGINATED BY DETERMINISTIC SYSTEMS
+   * (directors, ranged-combat policies): they are logged for debugging but
+   * excluded from replay sessions — the same systems re-fire them
+   * deterministically during a replay, and feeding them back would double. */
+  execute(world: World, action: Action, opts?: { internal?: boolean }): ActionResult {
     const result = this.doExecute(world, action);
     this.recent.push({ ...action, tick: world.tick, ok: result.ok, error: result.error });
     if (this.recent.length > this.recentLimit) this.recent.splice(0, this.recent.length - this.recentLimit);
+    if (result.ok && opts?.internal) {
+      const last = this.log[this.log.length - 1];
+      if (last) (last as any).internal = true;
+    }
     return result;
   }
 

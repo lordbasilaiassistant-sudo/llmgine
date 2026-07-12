@@ -6,6 +6,36 @@ import { TouchControls } from "./touch.js";
 import { GamepadInput } from "./gamepad.js";
 
 /**
+ * Turns PlayerControlled.moveX/moveY (set by the `move` verb) into velocity
+ * each tick. Pure sim logic — used identically in live play AND replays, so
+ * a recorded session reproduces movement exactly. Add it wherever a player
+ * exists (TopDownControls.system() includes it automatically).
+ */
+export function playerDriveSystem(): System {
+  return {
+    name: "player-drive",
+    order: -25, // after input verbs land, before behavior
+    update({ world }) {
+      for (const e of world.query(PlayerControlled, Velocity)) {
+        const pc = world.require(e, PlayerControlled);
+        const v = world.require(e, Velocity);
+        const active = pc.moveX !== 0 || pc.moveY !== 0;
+        if (active) {
+          v.vx = pc.moveX * v.maxSpeed;
+          v.vy = pc.moveY * v.maxSpeed;
+        } else {
+          const b = world.get(e, Behavior);
+          if (!b || b.mode === "idle") {
+            v.vx = 0;
+            v.vy = 0;
+          }
+        }
+      }
+    },
+  };
+}
+
+/**
  * Standard top-down player controls — the conventions people already know
  * from a decade of ARPGs/MOBAs, so ANY game built on this engine is
  * intuitively playable out of the box:
@@ -71,6 +101,8 @@ export class TopDownControls {
   private actionBuf = 0;
   private jumpBuf = 0;
   private pendingClick: { x: number; y: number } | null = null;
+  private lastMoveX = 0;
+  private lastMoveY = 0;
 
   constructor(opts: TopDownControlsOptions) {
     this.opts = opts;
@@ -178,14 +210,19 @@ export class TopDownControls {
     if (res.ok) this.moveMarker = { x: p.x, y: p.y, t: 0.9 };
   }
 
-  /** Add with the game's systems. Runs before behavior (order -30). */
+  /** Add with the game's systems. Runs before behavior (order -30). Movement
+   * flows DOM → `move` verb (on change) → PlayerControlled.moveX/moveY →
+   * playerDriveSystem → Velocity, so every input is in the action log and a
+   * recorded session replays identically. */
   system(): System {
     const gamepad = this.opts.gamepad;
     const touch = this.opts.touch;
+    const drive = playerDriveSystem();
     return {
       name: "player-controls",
       order: -30,
-      update: ({ world, dt }) => {
+      update: (ctx) => {
+        const { world, dt } = ctx;
         if (this.moveMarker && (this.moveMarker.t -= dt) <= 0) this.moveMarker = null;
         // clicks resolve in-tick (replayable through the action log)
         if (this.pendingClick) {
@@ -203,52 +240,44 @@ export class TopDownControls {
           if (this.jump()) this.jumpBuf = 0;
         }
         const avatar = this.opts.avatar();
-        if (!world.isAlive(avatar)) return;
-        const v = world.get(avatar, Velocity);
-        if (!v) return;
-        let x = 0;
-        let y = 0;
-        if (this.km.up.some((k) => this.keys.has(k))) y -= 1;
-        if (this.km.down.some((k) => this.keys.has(k))) y += 1;
-        if (this.km.left.some((k) => this.keys.has(k))) x -= 1;
-        if (this.km.right.some((k) => this.keys.has(k))) x += 1;
-        gamepad?.poll();
-        let analog = false;
-        if (touch?.state.active) {
-          x = touch.state.x;
-          y = touch.state.y;
-          analog = true;
-        } else if (gamepad?.state.active) {
-          x = gamepad.state.x;
-          y = gamepad.state.y;
-          analog = true;
-        }
-        const pc = world.get(avatar, PlayerControlled);
-        const direct = x !== 0 || y !== 0;
-        const b = world.get(avatar, Behavior);
-        if (direct) {
-          // direct input always wins — cancel ANY behavior order (goto,
-          // chase, attack, flee); a steering behavior left active fights
-          // the stick every tick and the character rubber-bands
-          if (b && b.mode !== "idle") {
-            b.mode = "idle";
-            b.target = 0;
+        if (world.isAlive(avatar)) {
+          let x = 0;
+          let y = 0;
+          if (this.km.up.some((k) => this.keys.has(k))) y -= 1;
+          if (this.km.down.some((k) => this.keys.has(k))) y += 1;
+          if (this.km.left.some((k) => this.keys.has(k))) x -= 1;
+          if (this.km.right.some((k) => this.keys.has(k))) x += 1;
+          if (x !== 0 || y !== 0) {
+            const m = Math.hypot(x, y);
+            x /= m;
+            y /= m;
           }
-          const m = Math.hypot(x, y) || 1;
-          const mag = Math.min(1, Math.hypot(x, y));
-          v.vx = (x / m) * v.maxSpeed * (analog ? mag : 1);
-          v.vy = (y / m) * v.maxSpeed * (analog ? mag : 1);
-          this.moveMarker = null;
-        } else if (!b || b.mode === "idle") {
-          // nobody driving: stop. (behaviorSystem leaves PlayerControlled
-          // entities alone in idle mode — the controller owns their velocity)
-          v.vx = 0;
-          v.vy = 0;
+          gamepad?.poll();
+          if (touch?.state.active) {
+            x = touch.state.x;
+            y = touch.state.y;
+          } else if (gamepad?.state.active) {
+            x = gamepad.state.x;
+            y = gamepad.state.y;
+          }
+          // quantize analog so the log isn't spammed with micro-deltas
+          x = Math.round(x * 20) / 20;
+          y = Math.round(y * 20) / 20;
+          if (x !== this.lastMoveX || y !== this.lastMoveY) {
+            const res = this.opts.actions.execute(world, {
+              actor: avatar,
+              verb: "move",
+              params: { x, y },
+            });
+            if (res.ok) {
+              this.lastMoveX = x;
+              this.lastMoveY = y;
+              if (x !== 0 || y !== 0) this.moveMarker = null;
+            }
+          }
         }
-        if (pc) {
-          pc.moveX = x;
-          pc.moveY = y;
-        }
+        // convert stick state → velocity (shared with replays)
+        drive.update(ctx);
       },
     };
   }

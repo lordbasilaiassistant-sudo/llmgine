@@ -145,6 +145,29 @@ export function behaviorSystem(nav?: NavGrid): System {
             break;
           }
 
+          case "skirmish": {
+            // keep-distance-and-shoot: back off when crowded, close when out
+            // of range, hold and face inside the band. The actual firing is
+            // rangedCombatSystem's job (verb-gated shoot).
+            if (!targetT) {
+              b.mode = "idle";
+              break;
+            }
+            const ranged = world.getNamed(e, "Ranged");
+            const pref = b.preferredRange > 0 ? b.preferredRange : ranged ? ranged.range * 0.6 : 180;
+            const dist = Math.hypot(targetT.x - t.x, targetT.y - t.y);
+            if (dist < pref * 0.7) {
+              steerTo(t.x * 2 - targetT.x, t.y * 2 - targetT.y); // back away
+            } else if (dist > pref * 1.2) {
+              steerTo(targetT.x, targetT.y);
+            } else {
+              v.vx = 0;
+              v.vy = 0;
+              t.rot = Math.atan2(targetT.y - t.y, targetT.x - t.x);
+            }
+            break;
+          }
+
           case "flee": {
             if (!targetT) {
               b.mode = "idle";
@@ -183,15 +206,17 @@ export function aggroSystem(nav?: NavGrid): System {
         // tick — the character lurches toward enemies against the stick
         if (world.has(victim, PlayerControlled)) continue;
         const b = world.get(victim, Behavior);
-        if (!b || !world.has(victim, Attack)) continue;
+        if (!b || !canFight(world, victim)) continue;
         if ((b.mode === "wander" || b.mode === "idle" || b.mode === "chase") && world.isAlive(attacker)) {
-          b.mode = "attack";
+          b.mode = combatModeOf(world, victim);
           b.target = attacker;
         }
       }
-      // sight-based acquisition
-      for (const e of world.query(Behavior, Faction, Attack, Transform)) {
+      // sight-based acquisition — melee (Attack) OR ranged (Ranged) fighters;
+      // a pure shooter with no melee must still be able to pick a target
+      for (const e of world.query(Behavior, Faction, Transform)) {
         if (world.has(e, PlayerControlled)) continue; // players pick their own fights
+        if (!canFight(world, e)) continue;
         const b = world.require(e, Behavior);
         if (b.mode !== "wander" && b.mode !== "idle") continue;
         const f = world.require(e, Faction);
@@ -213,10 +238,20 @@ export function aggroSystem(nav?: NavGrid): System {
           }
         }
         if (best) {
-          b.mode = "attack";
+          b.mode = combatModeOf(world, e);
           b.target = best;
         }
       }
     },
   };
+}
+
+/** Can this entity fight at all (melee Attack or Ranged)? */
+function canFight(world: import("../core/ecs.js").World, e: number): boolean {
+  return world.has(e, Attack) || world.hasNamed(e, "Ranged");
+}
+
+/** Ranged-only fighters skirmish; anything with melee closes in. */
+function combatModeOf(world: import("../core/ecs.js").World, e: number): string {
+  return !world.has(e, Attack) && world.hasNamed(e, "Ranged") ? "skirmish" : "attack";
 }

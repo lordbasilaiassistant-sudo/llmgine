@@ -378,7 +378,7 @@ function autoPickupSystem(): System {
       for (const e of world.query(Pickup, Transform)) {
         const t = world.require(e, Transform);
         if (Math.hypot(t.x - ht.x, t.y - ht.y) < 30) {
-          actions.execute(world, { actor: hero, verb: "pickup", params: { target: e } });
+          actions.execute(world, { actor: hero, verb: "pickup", params: { target: e } }, { internal: true });
         }
       }
     },
@@ -529,7 +529,7 @@ function bossDirectorSystem(): System {
         actions.execute(world, {
           actor: boss, verb: "say",
           params: { text: TAUNTS[DIRECTOR.ix++ % TAUNTS.length] },
-        });
+        }, { internal: true }); // director = deterministic system → replay re-derives it
       }
       const bt = world.require(boss, Transform);
       const ht = world.require(hero, Transform);
@@ -544,16 +544,16 @@ function bossDirectorSystem(): System {
           DIRECTOR.phase = "rain";
           DIRECTOR.phaseLeft = 7;
           // fall back toward the throne and rain hellfire — the scripted ranged phase
-          actions.execute(world, { actor: boss, verb: "move_to", params: { x: bt.x * 0.3, y: -300 } });
+          actions.execute(world, { actor: boss, verb: "move_to", params: { x: bt.x * 0.3, y: -300 } }, { internal: true });
         } else {
           DIRECTOR.phase = "press";
           DIRECTOR.phaseLeft = 12;
-          actions.execute(world, { actor: boss, verb: "attack", params: { target: hero } });
+          actions.execute(world, { actor: boss, verb: "attack", params: { target: hero } }, { internal: true });
         }
       }
       if (DIRECTOR.phase === "rain") {
         const r = world.get(boss, Ranged);
-        if (r && r.ready <= 0) actions.execute(world, { actor: boss, verb: "shoot", params: { target: hero } });
+        if (r && r.ready <= 0) actions.execute(world, { actor: boss, verb: "shoot", params: { target: hero } }, { internal: true });
       }
     },
   };
