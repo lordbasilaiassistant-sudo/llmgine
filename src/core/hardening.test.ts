@@ -4,8 +4,8 @@ import { ActionRegistry, actionSystem } from "./actions.js";
 import { SpatialGrid } from "./spatial.js";
 import { NavGrid } from "./nav.js";
 import {
-  Attack, Behavior, Collider, Faction, Health, Inventory, Pickup, Speech, Transform, Velocity,
-  ALL_COMPONENTS,
+  Attack, Behavior, Collider, Faction, Health, Inventory, Pickup, PlayerControlled, Speech,
+  Transform, Velocity, ALL_COMPONENTS,
 } from "../components.js";
 import { STANDARD_VERBS } from "../verbs.js";
 import { movementSystem, collisionSystem } from "../systems/movement.js";
@@ -397,6 +397,36 @@ describe("facing + jump — engine guarantees (no game can ship these broken)", 
     world.step(1 / 60);
     world.step(1 / 60);
     expect(world.require(jumper, Health).hp).toBe(50); // swing + bolt both passed beneath
+  });
+});
+
+describe("player input is never auto-piloted", () => {
+  it("aggro never seizes a PlayerControlled entity — behavior can't fight the stick", () => {
+    const world = new World(1);
+    const grid = new SpatialGrid();
+    world.addSystem(aggroSystem()).addSystem(behaviorSystem()).addSystem(movementSystem(grid)).addSystem(combatSystem());
+    const player = world.create();
+    world.add(player, Transform, { x: 0, y: 0 });
+    world.add(player, Velocity, { maxSpeed: 170 });
+    world.add(player, Behavior, { mode: "idle", sightRange: 300 });
+    world.add(player, Attack, {});
+    world.add(player, Health, {});
+    world.add(player, Faction, { id: "heroes", hostileTo: ["beasts"] });
+    world.add(player, PlayerControlled, {});
+    const foe = world.create();
+    world.add(foe, Transform, { x: 60, y: 0 });
+    world.add(foe, Health, {});
+    world.add(foe, Faction, { id: "beasts", hostileTo: ["heroes"] });
+    // hostile in plain sight + a hit landing on the player
+    dealDamage(world, foe, player, 5);
+    new GameLoop(world).advance(30);
+    const b = world.require(player, Behavior);
+    expect(b.mode).toBe("idle"); // no sight-acquire, no retaliation takeover
+    // player velocity, written by an input controller, survives behavior
+    const v = world.require(player, Velocity);
+    v.vx = 170;
+    world.step(1 / 60);
+    expect(world.require(player, Velocity).vx).toBe(170);
   });
 });
 

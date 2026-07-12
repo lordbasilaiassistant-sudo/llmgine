@@ -178,6 +178,10 @@ export function aggroSystem(nav?: NavGrid): System {
         const victim = j.payload?.target;
         const attacker = j.payload?.source;
         if (victim === undefined || attacker === undefined) continue;
+        // NEVER auto-pilot the player: aggro seizing a PlayerControlled
+        // entity makes behavior steering fight the input controller every
+        // tick — the character lurches toward enemies against the stick
+        if (world.has(victim, PlayerControlled)) continue;
         const b = world.get(victim, Behavior);
         if (!b || !world.has(victim, Attack)) continue;
         if ((b.mode === "wander" || b.mode === "idle" || b.mode === "chase") && world.isAlive(attacker)) {
@@ -187,6 +191,7 @@ export function aggroSystem(nav?: NavGrid): System {
       }
       // sight-based acquisition
       for (const e of world.query(Behavior, Faction, Attack, Transform)) {
+        if (world.has(e, PlayerControlled)) continue; // players pick their own fights
         const b = world.require(e, Behavior);
         if (b.mode !== "wander" && b.mode !== "idle") continue;
         const f = world.require(e, Faction);

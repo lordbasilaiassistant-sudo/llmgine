@@ -681,8 +681,9 @@ world.events.on("combat:damaged", (p: any) => {
     spawnDmgNum(t.x, t.y, `${p.amount}`, p.target === hero ? "#ff6d7d" : "#e8dcc8");
   }
   if (p.target === hero) renderer.shake = Math.min(10, renderer.shake + 5);
-  // hitstop: hits involving the player freeze the sim a few frames — weight
-  if (p.target === hero || p.source === hero) loop.hitstop(0.055);
+  // hitstop on the player's OWN hits connecting (the Hades rule) — freezing
+  // on received chip damage too reads as stutter, not weight
+  if (p.source === hero) loop.hitstop(0.045);
 });
 // enemy windups get a warning flash at the attacker — read it, then dodge it
 world.events.on("combat:windup", (p: any) => {

@@ -125,6 +125,8 @@ export class ThreeRenderer implements Renderer {
   private lookAt = new THREE.Vector3();
   private lookGoal = new THREE.Vector3();
   private camGoal = new THREE.Vector3();
+  private aheadX = 0;
+  private aheadY = 0;
   private lastDrawMs = 0;
   private opts: Required<Pick<ThreeRendererOptions, "cameraDistance" | "cameraHeight">> &
     ThreeRendererOptions;
@@ -251,13 +253,19 @@ export class ThreeRenderer implements Renderer {
         fz = t.y;
       }
       // velocity lookahead — bias the view TOWARD travel (action-game
-      // convention: show the player what they're running into)
+      // convention: show the player what they're running into). The
+      // lookahead itself is EASED: player velocity is a step function
+      // (instant accel), and feeding it raw makes the camera lurch on
+      // every key press/release.
       const v = world.get(this.followTarget, Velocity);
       if (v) {
         const clampU = (n: number) => Math.max(-60, Math.min(60, n));
-        lvx = clampU(v.vx * 0.35);
-        lvy = clampU(v.vy * 0.35);
+        const aheadK = 1 - Math.pow(1 - 0.035, dt * 60); // ~0.5s ease
+        this.aheadX += (clampU(v.vx * 0.35) - this.aheadX) * aheadK;
+        this.aheadY += (clampU(v.vy * 0.35) - this.aheadY) * aheadK;
       }
+      lvx = this.aheadX;
+      lvy = this.aheadY;
     }
     this.camGoal.set(fx * 0.6 + lvx * 0.5, this.opts.cameraHeight, fz * 0.6 + lvy * 0.5 + this.opts.cameraDistance);
     this.camera.position.lerp(this.camGoal, posK);

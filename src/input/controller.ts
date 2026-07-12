@@ -227,8 +227,13 @@ export class TopDownControls {
         const direct = x !== 0 || y !== 0;
         const b = world.get(avatar, Behavior);
         if (direct) {
-          // direct input always wins — cancel any click-to-move / verb order
-          if (b && (b.mode === "goto" || b.mode === "chase")) b.mode = "idle";
+          // direct input always wins — cancel ANY behavior order (goto,
+          // chase, attack, flee); a steering behavior left active fights
+          // the stick every tick and the character rubber-bands
+          if (b && b.mode !== "idle") {
+            b.mode = "idle";
+            b.target = 0;
+          }
           const m = Math.hypot(x, y) || 1;
           const mag = Math.min(1, Math.hypot(x, y));
           v.vx = (x / m) * v.maxSpeed * (analog ? mag : 1);
