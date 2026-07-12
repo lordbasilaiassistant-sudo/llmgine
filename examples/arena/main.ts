@@ -1004,6 +1004,11 @@ const loop = new GameLoop(world, { render: renderFrame });
 // or via the dev server bridge:  curl localhost:4173/agent/call -d '{"method":"observe"}'
 const agentPort = new AgentPort({ world, loop, actions, grid, avatar: hero, sightRange: 500 });
 world.addSystem(agentPort.system());
+// game-specific port methods — agents can restart to playtest fresh runs
+(agentPort as any).restart = () => {
+  restart();
+  return "restarted — world rebuilt from the pristine snapshot";
+};
 exposeAgentPort(agentPort);
 if (["localhost", "127.0.0.1"].includes(location.hostname)) {
   connectAgentBridge(agentPort);
