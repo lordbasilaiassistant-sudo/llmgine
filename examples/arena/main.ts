@@ -14,7 +14,7 @@ import {
   LootTables, lootSystem, QuestLog, offerQuest, questSystem,
   Mind, MindMemory, CognitionDriver, OpenAICompatibleProvider, InferenceBudget,
   Voice, WebSpeechVoice, voiceSystem, TouchControls, WebAudioService, audioSystem,
-  NavGrid, Ranged, shootVerb, Projectile, projectileSystem, GamepadInput,
+  NavGrid, Ranged, shootVerb, Projectile, projectileSystem, rangedCombatSystem, GamepadInput,
   SaveStore, LocalStorageAdapter, ALL_COMPONENTS, Genesis, PrefabRegistry,
   AgentPort, exposeAgentPort, connectAgentBridge, TopDownControls,
 } from "../../src/index.js";
@@ -94,6 +94,14 @@ const loot = new LootTables()
     ],
   })
   .define({
+    name: "sentinel-drops",
+    rolls: [1, 2],
+    items: [
+      { id: "potion", name: "Potion", weight: 4, color: "#e35d6d" }, // the bounty for making the read
+      { id: "gold", name: "Gold", weight: 4, qty: [6, 12], color: "#d4a24e" },
+    ],
+  })
+  .define({
     name: "boss-drops",
     rolls: [3, 4],
     items: [
@@ -129,9 +137,12 @@ function makeBoss(): Entity {
   world.add(e, Collider, { radius: 24 });
   world.add(e, Sprite, { kind: "arenamaster", color: "#c23b4e", size: 52, layer: 1 });
   world.add(e, Named, { name: "The Arena Master", blurb: "an ancient intelligence that rules the pit" });
-  world.add(e, Health, { hp: 420, maxHp: 420 });
+  world.add(e, Health, { hp: 900, maxHp: 900 }); // skilled TTK ~26s — room for the add phases to breathe
   world.add(e, Faction, { id: "arena", hostileTo: ["challenger"] });
-  world.add(e, Attack, { damage: 16, range: 64, cooldown: 1.3, windup: 0.6, knockback: 170 }); // big telegraphed haymaker
+  // the haymaker must PUNISH face-tanking — at 8dps the old boss lost a
+  // stand-still dps race before any add gate could fire. 34dmg/1.9s cycle
+  // kills a non-dodging player in ~11s; every windup is a real decision.
+  world.add(e, Attack, { damage: 34, range: 64, cooldown: 1.3, windup: 0.6, knockback: 200 });
   // waits near the throne (aggro on approach), leashes back — cull the pack first, then duel
   world.add(e, Behavior, { mode: "idle", sightRange: 260, homeX: 0, homeY: -180, leash: 340 });
   // hellfire bolts — the Mind chooses when to shoot (its own tool call)
@@ -165,6 +176,44 @@ function makeGoblin(x: number, y: number): Entity {
   world.add(e, Faction, { id: "arena", hostileTo: ["challenger"] });
   world.add(e, Attack, { damage: 4, range: 30, cooldown: 0.9, knockback: 90 }); // windup 0.35 default = readable
   world.add(e, Behavior, { mode: "wander", sightRange: 220, homeX: x, homeY: y, leash: 0 });
+  world.add(e, LootDrop, { table: "goblin-drops" });
+  return e;
+}
+
+// THE VERDIGRIS SENTINEL — the jump-bait. Windup 0.85s vs jump airtime
+// 0.615s: panic-jumping the INSTANT you see the maul rise means you land
+// into the slam during recovery. Read it, delay the jump (or just walk out),
+// and the whiff hands you a ~3s punish window.
+function makeSentinel(x: number, y: number): Entity {
+  const e = world.create();
+  world.add(e, Transform, { x, y });
+  world.add(e, Velocity, { maxSpeed: 55 });
+  world.add(e, Collider, { radius: 16 });
+  world.add(e, Sprite, { kind: "sentinel", color: "#4f9a7e", size: 32, layer: 1 });
+  world.add(e, Named, { name: "Verdigris Sentinel", blurb: "an awakened statue guarding its post" });
+  world.add(e, Health, { hp: 90, maxHp: 90 });
+  world.add(e, Faction, { id: "arena", hostileTo: ["challenger"] });
+  world.add(e, Attack, { damage: 26, range: 80, cooldown: 2.2, windup: 0.85, knockback: 500 }); // the launch
+  world.add(e, Behavior, { mode: "idle", sightRange: 200, homeX: x, homeY: y, leash: 160 });
+  world.add(e, LootDrop, { table: "sentinel-drops" });
+  return e;
+}
+
+// THE ASH CHANTER — makes pillars matter. Pure data: Ranged + no Attack →
+// aggro routes it to skirmish; Ranged.windup is the 0.4s chant telegraph;
+// rangedCombatSystem holds fire without line of sight and NavGrid steering
+// walks it around your cover. Squishy on purpose — reaching it IS the fight.
+function makeChanter(x: number, y: number): Entity {
+  const e = world.create();
+  world.add(e, Transform, { x, y });
+  world.add(e, Velocity, { maxSpeed: 95 });
+  world.add(e, Collider, { radius: 10 });
+  world.add(e, Sprite, { kind: "chanter", color: "#b06df0", size: 26, layer: 1 });
+  world.add(e, Named, { name: "Ash Chanter", blurb: "a gaunt acolyte chanting violet fire" });
+  world.add(e, Health, { hp: 35, maxHp: 35 });
+  world.add(e, Faction, { id: "arena", hostileTo: ["challenger"] });
+  world.add(e, Ranged, { damage: 10, speed: 200, range: 460, cooldown: 1.6, knockback: 120, windup: 0.4, color: "#b06df0" });
+  world.add(e, Behavior, { mode: "idle", sightRange: 460, preferredRange: 280, homeX: x, homeY: y, leash: 0 });
   world.add(e, LootDrop, { table: "goblin-drops" });
   return e;
 }
@@ -386,9 +435,29 @@ function autoPickupSystem(): System {
 }
 
 let spawnClock = 10;
-// portal telegraph: goblins announce themselves 0.9s before existing —
-// nothing ever materializes inside melee range with zero warning
-const pendingSpawns: Array<{ x: number; y: number; t: number }> = [];
+let addClock = 4; // elite-add pacing, separate from goblin waves
+// portal telegraph: enemies announce themselves before existing — nothing
+// ever materializes inside melee range with zero warning
+const pendingSpawns: Array<{ x: number; y: number; t: number; kind: "goblin" | "sentinel" | "chanter" }> = [];
+const countByName = (name: string) =>
+  [...world.query(Behavior)].filter((e) => world.get(e, Named)?.name === name).length +
+  pendingSpawns.filter((p) => (p.kind === "sentinel" ? name === "Verdigris Sentinel" : p.kind === "chanter" ? name === "Ash Chanter" : name === "Pit Goblin")).length;
+
+/** A fair spawn point: away from the player, resampled deterministically. */
+function fairSpawnPoint(radius: number, minFromHero = 120, halfPlane?: "south"): { x: number; y: number } {
+  const ht = world.get(hero, Transform);
+  let sx = 0;
+  let sy = radius;
+  for (let tries = 0; tries < 6; tries++) {
+    const a = halfPlane === "south" ? world.rng.next() * Math.PI : world.rng.next() * Math.PI * 2;
+    sx = Math.cos(a) * radius;
+    sy = Math.abs(Math.sin(a)) * radius * (halfPlane === "south" ? 1 : Math.sign(Math.sin(a)) || 1);
+    if (halfPlane !== "south") sy = Math.sin(a) * radius;
+    if (!ht || Math.hypot(sx - ht.x, sy - ht.y) > minFromHero) break;
+  }
+  return { x: sx, y: sy };
+}
+
 function spawnerSystem(): System {
   return {
     name: "spawner",
@@ -400,33 +469,57 @@ function spawnerSystem(): System {
         p.t -= dt;
         if (p.t <= 0) {
           pendingSpawns.splice(i, 1);
-          makeGoblin(p.x, p.y);
+          if (p.kind === "sentinel") makeSentinel(p.x, p.y);
+          else if (p.kind === "chanter") makeChanter(p.x, p.y);
+          else makeGoblin(p.x, p.y);
         }
       }
-      spawnClock -= dt;
-      const goblins = [...world.query(Behavior)].filter(
-        (e) => world.get(e, Named)?.name === "Pit Goblin",
-      ).length;
-      // pressure ramps with boss damage: 3 goblins at full hp → 6 near death,
-      // respawn 22s → 12s below half — minute five must not feel like minute one
       const bh = world.get(boss, Health);
       const frac = bh ? bh.hp / bh.maxHp : 1;
+
+      // goblin waves: pressure ramps with boss damage (3 → 6, respawn 22s → 12s)
+      spawnClock -= dt;
+      const goblins = countByName("Pit Goblin");
       const cap = 3 + Math.floor((1 - frac) * 3);
       const respawn = frac < 0.5 ? 12 : 22;
-      if (spawnClock <= 0 && goblins + pendingSpawns.length < cap) {
+      if (spawnClock <= 0 && goblins < cap) {
         spawnClock = respawn;
-        const ht = world.get(hero, Transform);
-        let sx = 0;
-        let sy = 0;
-        // never spawn on top of the player — resample away from them
-        for (let tries = 0; tries < 4; tries++) {
-          const a = world.rng.next() * Math.PI * 2;
-          sx = Math.cos(a) * SPAWN_R;
-          sy = Math.sin(a) * SPAWN_R;
-          if (!ht || Math.hypot(sx - ht.x, sy - ht.y) > 120) break;
+        const p = fairSpawnPoint(SPAWN_R);
+        pendingSpawns.push({ ...p, t: 0.9, kind: "goblin" });
+        world.events.emit("spawn:telegraph", { ...p, duration: 0.9, kind: "goblin" });
+      }
+
+      // elite adds, gated on boss hp (the expert's ramp). Desired counts are
+      // DERIVED from world state each tick — stateless, so F9/restart just work.
+      // Readability cap: ≤2 non-goblin adds alive, ≤2 of a type.
+      addClock -= dt;
+      if (addClock <= 0) {
+        addClock = 8;
+        const sentinels = countByName("Verdigris Sentinel");
+        const chanters = countByName("Ash Chanter");
+        const elites = sentinels + chanters;
+        if (elites < 2) {
+          if (frac < 0.7 && sentinels === 0) {
+            // solo introduction at a mid-ring post between the south pillars —
+            // meet the slam with no other pressure
+            const p = { x: 0, y: 120 };
+            pendingSpawns.push({ ...p, t: 1.1, kind: "sentinel" });
+            world.events.emit("spawn:telegraph", { ...p, duration: 1.1, kind: "sentinel" });
+          } else if (frac < 0.5 && chanters === 0) {
+            // outer ring, hemisphere opposite the throne — crossfire begins
+            const p = fairSpawnPoint(300, 120, "south");
+            pendingSpawns.push({ ...p, t: 1.1, kind: "chanter" });
+            world.events.emit("spawn:telegraph", { ...p, duration: 1.1, kind: "chanter" });
+          } else if (frac < 0.35) {
+            // endgame replacement add — deterministic alternation via world rng
+            const kind = world.rng.chance(0.5) && sentinels < 2 ? "sentinel" : chanters < 2 ? "chanter" : sentinels < 2 ? "sentinel" : null;
+            if (kind) {
+              const p = kind === "sentinel" ? fairSpawnPoint(180, 140) : fairSpawnPoint(300, 140, "south");
+              pendingSpawns.push({ ...p, t: 1.1, kind });
+              world.events.emit("spawn:telegraph", { ...p, duration: 1.1, kind });
+            }
+          }
         }
-        pendingSpawns.push({ x: sx, y: sy, t: 0.9 });
-        world.events.emit("spawn:telegraph", { x: sx, y: sy, duration: 0.9 });
       }
     },
   };
@@ -581,6 +674,7 @@ world
   .addSystem(movementSystem(grid))
   .addSystem(collisionSystem(grid))
   .addSystem(pitBoundsSystem())
+  .addSystem(rangedCombatSystem(actions, nav)) // chanters fire through the verb gate, LoS-gated
   .addSystem(projectileSystem(grid, nav)) // hellfire stops on pillars — cover is real
   .addSystem(combatSystem())
   .addSystem(impactSystem())
@@ -697,7 +791,12 @@ world.events.on("boss:lunge:windup", (p: any) => {
 world.events.on("boss:lunge", () => {
   renderer.shake = Math.min(12, renderer.shake + 7);
 });
-world.events.on("spawn:telegraph", (p: any) => flashAt(p.x, p.y, 0x7aa35a, 9000, p.duration ?? 0.9));
+world.events.on("spawn:telegraph", (p: any) => {
+  const color = p.kind === "sentinel" ? 0x6fe8b8 : p.kind === "chanter" ? 0xb06df0 : 0x7aa35a;
+  flashAt(p.x, p.y, color, p.kind === "goblin" ? 9000 : 14000, p.duration ?? 0.9);
+  if (p.kind === "sentinel") typeRibbon("…stone grinds awake. Watch the maul.");
+  if (p.kind === "chanter") typeRibbon("…a chant rises. Break its line of sight.");
+});
 world.events.on("combat:death", (p: any) => {
   if (p.x !== undefined) {
     flashAt(p.x, p.y, p.entity === boss ? 0xd4a24e : 0x7aa35a, 90000, 0.8);
@@ -972,6 +1071,7 @@ function resetAfterLoad() {
   Object.assign(DIRECTOR, { clock: 3.5, ix: 0, phase: "press", phaseLeft: 12, engaged: false });
   Object.assign(LUNGE, { clock: 5, winding: 0, dirX: 0, dirY: 0 });
   pendingSpawns.length = 0;
+  addClock = 4;
   const culled = world.get(hero, QuestLog)?.active[0]?.progress[0] ?? 0;
   goblinKills = culled;
   relicSpawned = culled >= 3;

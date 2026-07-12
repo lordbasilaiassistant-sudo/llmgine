@@ -27,6 +27,11 @@ const windupOf = (world: World, e: number) => {
   const atk = world.get(e, Attack);
   return atk && atk.winding > 0 && atk.windup > 0 ? 1 - atk.winding / atk.windup : 0;
 };
+/** Same, for ranged chant telegraphs (Ranged.winding). */
+const rangedWindupOf = (world: World, e: number) => {
+  const r = world.getNamed(e, "Ranged");
+  return r && r.winding > 0 && r.windup > 0 ? 1 - r.winding / r.windup : 0;
+};
 /**
  * Rig Y-rotation from the ENGINE's facing (Transform.rot — set by movement,
  * combat and behavior, so standing strikes face their target too). Models
@@ -311,6 +316,119 @@ export function goblinModel({ world, entity }: ModelContext): THREE.Object3D {
   return g;
 }
 
+// ── VERDIGRIS SENTINEL — the jump-bait statue ──────────────────
+// Squat, WIDE, flat-topped bronze golem with a stone maul. The tell is a
+// sudden VERTICAL silhouette spike: maul raised fully overhead + core flare.
+export function sentinelModel({ world, entity }: ModelContext): THREE.Object3D {
+  const g = new THREE.Group();
+  const rig = new THREE.Group();
+  g.add(rig);
+  const verdigris = std(0x4f9a7e, { roughness: 0.55, metalness: 0.5 });
+  const gilt = std(0xd4a24e, { metalness: 0.85, roughness: 0.3 });
+
+  // broad low body — width ≈ height
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(13, 15, 14, 8), verdigris);
+  body.position.y = 9;
+  rig.add(body);
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(14.5, 13, 3, 8), gilt);
+  top.position.y = 17.5;
+  rig.add(top);
+  // core crack — emissive only (no light: light-count stays constant)
+  const coreMat = new THREE.MeshStandardMaterial({
+    color: 0x143528,
+    emissive: 0x6fe8b8,
+    emissiveIntensity: 0.8,
+    roughness: 0.4,
+  });
+  const core = new THREE.Mesh(new THREE.BoxGeometry(16, 2.2, 2.2), coreMat);
+  core.position.y = 11;
+  core.position.z = 6.5;
+  rig.add(core);
+  for (const side of [-1, 1]) {
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(7, 4, 9), verdigris);
+    foot.position.set(side * 8, 2, 0);
+    rig.add(foot);
+  }
+  // maul arm — held low at rest, raised OVERHEAD during the windup
+  const arm = new THREE.Group();
+  arm.position.set(14, 14, 0);
+  const haft = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 26, 8), std(0x5a4a38));
+  haft.position.y = 8;
+  arm.add(haft);
+  const maulHead = new THREE.Mesh(new THREE.BoxGeometry(9, 7, 7), std(0x6b6577, { roughness: 0.8 }));
+  maulHead.position.y = 21;
+  arm.add(maulHead);
+  const band = new THREE.Mesh(new THREE.TorusGeometry(2.1, 0.5, 6, 10), gilt);
+  band.rotation.x = Math.PI / 2;
+  band.position.y = 16;
+  arm.add(band);
+  rig.add(arm);
+
+  let heading = 0;
+  arm.rotation.z = 1.15; // maul resting near the ground
+  g.userData.selfRotate = true;
+  g.userData.animate = (time: number, world2: World, e: number) => {
+    heading = headingOf(world2, e, heading);
+    rig.rotation.y = heading;
+    const wind = windupOf(world2, e); // 0→1 raise
+    const whip = swingOf(world2, e); // slam follow-through
+    // rest 1.15 → overhead -1.35 during windup; whip slams forward past it
+    arm.rotation.z = 1.15 - wind * 2.5 + whip * 2.9;
+    coreMat.emissiveIntensity = 0.8 + wind * 4.5; // core flare = incoming slam
+    rig.position.y = Math.sin(time * 1.1 + e) * 0.35 + whip * -1.2;
+  };
+  return g;
+}
+
+// ── ASH CHANTER — the crossfire acolyte ────────────────────────
+// TALL and THIN — a vertical needle in bone-white robes. Chant tell: the
+// violet staff orb swells and flares before every bolt.
+export function chanterModel({ world, entity }: ModelContext): THREE.Object3D {
+  const g = new THREE.Group();
+  const rig = new THREE.Group();
+  g.add(rig);
+  const bone = std(0xd8cfc0, { roughness: 0.75 });
+
+  const robe = new THREE.Mesh(new THREE.ConeGeometry(6.5, 34, 8), bone);
+  robe.position.y = 17;
+  rig.add(robe);
+  const hood = new THREE.Mesh(new THREE.SphereGeometry(3.4, 10, 8), bone);
+  hood.position.y = 35;
+  rig.add(hood);
+  const face = new THREE.Mesh(
+    new THREE.SphereGeometry(2.2, 8, 8),
+    new THREE.MeshStandardMaterial({ color: 0x1a1424, roughness: 0.9 }),
+  );
+  face.position.set(0, 34.6, 2);
+  rig.add(face);
+  // staff + violet orb (emissive only)
+  const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 30, 6), std(0x3d3227));
+  staff.position.set(6.5, 20, 2);
+  rig.add(staff);
+  const orbMat = new THREE.MeshStandardMaterial({
+    color: 0x2a1740,
+    emissive: 0xb06df0,
+    emissiveIntensity: 2,
+    roughness: 0.2,
+  });
+  const orb = new THREE.Mesh(new THREE.SphereGeometry(2.6, 12, 10), orbMat);
+  orb.position.set(6.5, 36.5, 2);
+  rig.add(orb);
+
+  let heading = 0;
+  g.userData.selfRotate = true;
+  g.userData.animate = (time: number, world2: World, e: number) => {
+    heading = headingOf(world2, e, heading);
+    rig.rotation.y = heading;
+    rig.position.y = Math.sin(time * 2.2 + e) * 0.8; // unsettling hover-sway
+    const chant = rangedWindupOf(world2, e); // 0→1 before each bolt
+    const s = 1 + chant * 0.8;
+    orb.scale.setScalar(s);
+    orbMat.emissiveIntensity = 2 + chant * 3 + Math.sin(time * 6 + e) * 0.3;
+  };
+  return g;
+}
+
 // ── LOOT ───────────────────────────────────────────────────────
 export function pickupModel({ world, entity, sprite }: ModelContext): THREE.Object3D {
   const g = new THREE.Group();
@@ -429,6 +547,8 @@ export function registerModels(r: ThreeRenderer): void {
   r.defineModel("gladiator", gladiator)
     .defineModel("arenamaster", arenaMaster)
     .defineModel("goblin", goblinModel)
+    .defineModel("sentinel", sentinelModel)
+    .defineModel("chanter", chanterModel)
     .defineModel("pickup", pickupModel)
     .defineModel("pillar", pillarModel)
     .defineModel("projectile", projectileModel);
