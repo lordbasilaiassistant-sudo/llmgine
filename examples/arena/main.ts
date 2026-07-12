@@ -16,7 +16,7 @@ import {
   Voice, WebSpeechVoice, voiceSystem, TouchControls, WebAudioService, audioSystem,
   NavGrid, Ranged, shootVerb, Projectile, projectileSystem, GamepadInput,
   SaveStore, LocalStorageAdapter, ALL_COMPONENTS, Genesis, PrefabRegistry,
-  AgentPort, exposeAgentPort, connectAgentBridge,
+  AgentPort, exposeAgentPort, connectAgentBridge, TopDownControls,
 } from "../../src/index.js";
 import type { Entity, System, VoiceService } from "../../src/index.js";
 import { ThreeRenderer } from "../../src/render3d/three.js";
@@ -311,21 +311,15 @@ async function quickLoad() {
   }
 }
 
-const keys = new Set<string>();
+// game-specific keys (F5/F9 save, R restart, Escape) — movement/click/strike
+// live in the engine's standard TopDownControls below
 addEventListener("keydown", (e) => {
   if (e.key === "Escape") { modal.classList.remove("open"); return; }
-  // typing in the key modal (or any input) must never drive the hero
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-  keys.add(e.key.toLowerCase());
   const mod = e.ctrlKey || e.metaKey || e.altKey || e.shiftKey;
-  if (e.key === " ") { e.preventDefault(); playerStrike(); }
   if (e.key === "F5" && !mod) { e.preventDefault(); quickSave(); } // Ctrl+F5 stays browser refresh
   if (e.key === "F9" && !mod) { e.preventDefault(); quickLoad(); }
   if (e.key.toLowerCase() === "r" && !mod && !world.isAlive(hero)) restart();
-});
-addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
-addEventListener("pointerdown", (e) => {
-  if ((e.target as HTMLElement).tagName === "CANVAS") playerStrike();
 });
 
 function playerStrike() {
@@ -335,35 +329,18 @@ function playerStrike() {
 const touch = new TouchControls(document.body, { onAction: () => playerStrike() });
 const gamepad = new GamepadInput({ buttons: { 0: () => playerStrike(), 7: () => playerStrike() } });
 
-function playerInputSystem(): System {
-  return {
-    name: "player-input",
-    order: -30,
-    update({ world }) {
-      if (!world.isAlive(hero)) return;
-      const v = world.get(hero, Velocity);
-      if (!v) return;
-      let x = 0, y = 0;
-      if (keys.has("w") || keys.has("arrowup")) y -= 1;
-      if (keys.has("s") || keys.has("arrowdown")) y += 1;
-      if (keys.has("a") || keys.has("arrowleft")) x -= 1;
-      if (keys.has("d") || keys.has("arrowright")) x += 1;
-      gamepad.poll();
-      if (touch.state.active) {
-        x = touch.state.x;
-        y = touch.state.y;
-      } else if (gamepad.state.active) {
-        x = gamepad.state.x;
-        y = gamepad.state.y;
-      }
-      const m = Math.hypot(x, y) || 1;
-      const analog = touch.state.active || gamepad.state.active;
-      const mag = Math.min(1, Math.hypot(x, y));
-      v.vx = (x / m) * v.maxSpeed * (analog ? mag : 1);
-      v.vy = (y / m) * v.maxSpeed * (analog ? mag : 1);
-    },
-  };
-}
+// Standard controls: WASD/stick direct, click ground = walk there (NavGrid
+// routes around pillars), click an enemy = attack it, Space/pad A = strike.
+const controls = new TopDownControls({
+  world,
+  actions,
+  avatar: () => hero,
+  screenToWorld: (x, y) => renderer.groundPoint(x, y),
+  grid,
+  onAction: () => playerStrike(),
+  touch,
+  gamepad,
+});
 
 function pitBoundsSystem(): System {
   return {
@@ -517,7 +494,7 @@ world.events.on("item:pickup", (p: any) => {
 
 world
   .addSystem(actionSystem(actions))
-  .addSystem(playerInputSystem())
+  .addSystem(controls.system())
   .addSystem(aggroSystem(nav)) // line-of-sight aggro: pillars actually hide you
   .addSystem(behaviorSystem(nav))
   .addSystem(movementSystem(grid))
@@ -565,13 +542,28 @@ renderer.onFrame = animateEnv;
 addEventListener("resize", () => renderer.resize(innerWidth, innerHeight));
 renderer.resize(innerWidth, innerHeight);
 
-// hit/death flashes: transient point lights
-const flashes: Array<{ light: any; t: number; max: number }> = [];
-function flashAt(x: number, y: number, color: number, intensity: number, life = 0.4) {
-  const L = new renderer.three.PointLight(color, intensity, 160, 2);
-  L.position.set(x, 26, y);
+// hit/death flashes — POOLED point lights. Adding/removing lights changes
+// the scene's light count, and three.js recompiles EVERY shader program when
+// that happens: one flash per hit = a recompile stall per hit = combat
+// slideshow. A fixed pool keeps the light count constant forever.
+const FLASH_POOL = 10;
+const flashes: Array<{ light: any; t: number; max: number; base: number }> = [];
+for (let i = 0; i < FLASH_POOL; i++) {
+  const L = new renderer.three.PointLight(0xffffff, 0, 160, 2);
+  L.position.set(0, -9999, 0);
   renderer.scene.add(L);
-  flashes.push({ light: L, t: 0, max: life });
+  flashes.push({ light: L, t: 1, max: 1, base: 0 });
+}
+let flashIx = 0;
+function flashAt(x: number, y: number, color: number, intensity: number, life = 0.4) {
+  const f = flashes[flashIx];
+  flashIx = (flashIx + 1) % FLASH_POOL;
+  f.light.color.setHex(color);
+  f.light.position.set(x, 26, y);
+  f.light.intensity = intensity;
+  f.base = intensity;
+  f.t = 0;
+  f.max = life;
 }
 
 // death bursts: additive ember puffs where something falls
@@ -768,20 +760,19 @@ const questList = document.getElementById("quest-list")!;
 const satchelList = document.getElementById("satchel-list")!;
 let lastVfx = performance.now();
 const hitScaled = new Set<number>();
+let lastDest: { x: number; y: number; t: number } | null = null;
 
 function renderFrame(alpha: number) {
   const now = performance.now();
   const dt = Math.min((now - lastVfx) / 1000, 0.1);
   lastVfx = now;
 
-  for (let i = flashes.length - 1; i >= 0; i--) {
-    const f = flashes[i];
+  for (const f of flashes) {
+    if (f.t >= f.max) continue;
     f.t += dt;
-    f.light.intensity *= Math.max(0, 1 - f.t / f.max);
-    if (f.t >= f.max) {
-      renderer.scene.remove(f.light);
-      flashes.splice(i, 1);
-    }
+    const k = Math.max(0, 1 - f.t / f.max);
+    f.light.intensity = f.base * k * k;
+    if (f.t >= f.max) f.light.intensity = 0; // slot free (light stays in scene)
   }
   for (let i = bursts.length - 1; i >= 0; i--) {
     const b = bursts[i];
@@ -803,6 +794,13 @@ function renderFrame(alpha: number) {
     }
   }
   renderer.shake = Math.max(0, renderer.shake - dt * 22);
+
+  // click-to-move destination ping
+  const dest = controls.destination;
+  if (dest && dest !== lastDest) {
+    lastDest = dest;
+    flashAt(dest.x, dest.y, 0x62d9c4, 9000, 0.35);
+  }
 
   renderer.draw(world, alpha);
 
@@ -844,8 +842,12 @@ function renderFrame(alpha: number) {
 // ── load/restart hygiene: module state must follow the world ───
 function resetAfterLoad() {
   spawnClock = 10;
-  for (const f of flashes) renderer.scene.remove(f.light);
-  flashes.length = 0;
+  // pool lights stay in the scene (constant light count = no shader
+  // recompiles) — just snuff them
+  for (const f of flashes) {
+    f.light.intensity = 0;
+    f.t = f.max;
+  }
   for (const b of bursts) { renderer.scene.remove(b.pts); b.geo.dispose(); b.mat.dispose(); }
   bursts.length = 0;
   for (const e of hitFx.keys()) renderer.objectOf(e)?.scale.setScalar(1);
@@ -902,7 +904,7 @@ loop.start();
 
 // dev handle for debugging (harmless in production)
 (globalThis as any).__game = {
-  world, renderer, actions, hero, boss, loop, keys, touch, sfx,
+  world, renderer, actions, hero, boss, loop, keys: controls.keys, controls, touch, sfx,
   restart, quickSave, quickLoad, DIRECTOR, agentPort,
   get driver() { return driver; },
   C: { Transform, Health, Named, Inventory, Speech, Behavior, Pickup },

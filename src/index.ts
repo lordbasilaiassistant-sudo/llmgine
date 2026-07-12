@@ -17,6 +17,7 @@ export * from "./ai/index.js";
 // input & audio
 export * from "./input/touch.js";
 export * from "./input/gamepad.js";
+export * from "./input/controller.js";
 export * from "./audio/audio.js";
 export * from "./core/save.js";
 

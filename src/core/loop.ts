@@ -97,7 +97,10 @@ export class GameLoop {
           this.bgTimer ??= setInterval(() => {
             if (this.paused) return;
             const now = performance.now();
-            let elapsed = Math.min((now - bgLast) / 1000, 2);
+            // cap the catch-up batch: a heavy combat tick times 120 queued
+            // steps would block the main thread for seconds — better to let
+            // background sim time slip than to freeze the tab
+            let elapsed = Math.min((now - bgLast) / 1000, 0.25);
             bgLast = now;
             while (elapsed >= this.timestep) {
               this.world.step(this.timestep);

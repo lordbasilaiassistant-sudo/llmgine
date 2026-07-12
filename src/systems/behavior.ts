@@ -1,6 +1,6 @@
 import type { System } from "../core/ecs.js";
 import type { NavGrid } from "../core/nav.js";
-import { Attack, Behavior, Faction, Health, Transform, Velocity } from "../components.js";
+import { Attack, Behavior, Faction, Health, PlayerControlled, Transform, Velocity } from "../components.js";
 
 /**
  * Deterministic behavior policies — the 60 Hz actuator under every entity.
@@ -66,8 +66,12 @@ export function behaviorSystem(nav?: NavGrid): System {
 
         switch (b.mode) {
           case "idle":
-            v.vx = 0;
-            v.vy = 0;
+            // a player-controlled entity in idle is driven by its input
+            // controller — zeroing here would clobber WASD every tick
+            if (!world.has(e, PlayerControlled)) {
+              v.vx = 0;
+              v.vy = 0;
+            }
             break;
 
           case "wander": {

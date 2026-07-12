@@ -312,6 +312,27 @@ export class ThreeRenderer implements Renderer {
   }
 
   /**
+   * Screen px → sim-plane world point (the inverse of project, on the
+   * ground plane y=0). Powers click/tap-to-move — see input/controller.ts.
+   * Returns null when the ray misses the plane (looking at the sky).
+   */
+  groundPoint(clientX: number, clientY: number): { x: number; y: number } | null {
+    // matrixWorld only refreshes during render — unproject against the
+    // camera's CURRENT pose (hidden tabs / same-frame camera moves)
+    this.camera.updateMatrixWorld();
+    const rect = this.gl.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const hit = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit)) return null;
+    return { x: hit.x, y: hit.z }; // sim y maps to world z
+  }
+
+  /**
    * Region around a world point as PNG — the Eyes pixel feed.
    *
    * Approach: project (x, y) to screen space and CROP the current framebuffer
