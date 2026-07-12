@@ -23,8 +23,8 @@ export class NavGrid {
     return [Math.floor(x / this.cellSize), Math.floor(y / this.cellSize)];
   }
 
-  /** Stamp a circular obstacle (world units). */
-  blockCircle(x: number, y: number, radius: number): void {
+  /** Exact circle-vs-cell-rect test shared by block/unblock. */
+  private *circleCells(x: number, y: number, radius: number): IterableIterator<string> {
     const c = this.cellSize;
     const x0 = Math.floor((x - radius) / c);
     const x1 = Math.floor((x + radius) / c);
@@ -32,11 +32,24 @@ export class NavGrid {
     const y1 = Math.floor((y + radius) / c);
     for (let cx = x0; cx <= x1; cx++) {
       for (let cy = y0; cy <= y1; cy++) {
-        const px = (cx + 0.5) * c;
-        const py = (cy + 0.5) * c;
-        if (Math.hypot(px - x, py - y) <= radius + c * 0.5) this.blocked.add(this.key(cx, cy));
+        // clamp circle center to the cell rect — exact overlap test (no
+        // center-distance approximation that under-blocks corner cells)
+        const nx = Math.max(cx * c, Math.min(x, (cx + 1) * c));
+        const ny = Math.max(cy * c, Math.min(y, (cy + 1) * c));
+        if (Math.hypot(nx - x, ny - y) <= radius) yield this.key(cx, cy);
       }
     }
+  }
+
+  /** Stamp a circular obstacle (world units). */
+  blockCircle(x: number, y: number, radius: number): void {
+    for (const k of this.circleCells(x, y, radius)) this.blocked.add(k);
+  }
+
+  /** Remove a circular obstacle (destroyed pillar, opened door). Unblocks the
+   * exact cells blockCircle would have stamped for the same shape. */
+  unblockCircle(x: number, y: number, radius: number): void {
+    for (const k of this.circleCells(x, y, radius)) this.blocked.delete(k);
   }
 
   blockRect(x0: number, y0: number, x1: number, y1: number): void {
@@ -57,15 +70,75 @@ export class NavGrid {
     return this.blocked.has(this.key(cx, cy));
   }
 
-  /** Straight line unobstructed? (cheap pre-check before A*) */
+  /**
+   * Straight line unobstructed? Supercover grid traversal (Amanatides–Woo):
+   * visits EVERY cell the segment passes through — sampling-based versions
+   * miss clipped cells and let paths cut through walls.
+   */
   lineClear(x0: number, y0: number, x1: number, y1: number): boolean {
-    const dist = Math.hypot(x1 - x0, y1 - y0);
-    const steps = Math.max(1, Math.ceil(dist / (this.cellSize * 0.5)));
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      if (this.isBlocked(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return false;
+    const c = this.cellSize;
+    let cx = Math.floor(x0 / c);
+    let cy = Math.floor(y0 / c);
+    const ex = Math.floor(x1 / c);
+    const ey = Math.floor(y1 / c);
+    if (this.blocked.has(this.key(cx, cy))) return false;
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+    const stepY = dy > 0 ? 1 : dy < 0 ? -1 : 0;
+    const tDeltaX = stepX !== 0 ? Math.abs(c / dx) : Infinity;
+    const tDeltaY = stepY !== 0 ? Math.abs(c / dy) : Infinity;
+    let tMaxX = stepX !== 0 ? ((cx + (stepX > 0 ? 1 : 0)) * c - x0) / dx : Infinity;
+    let tMaxY = stepY !== 0 ? ((cy + (stepY > 0 ? 1 : 0)) * c - y0) / dy : Infinity;
+    let guard = Math.abs(ex - cx) + Math.abs(ey - cy) + 4;
+    while ((cx !== ex || cy !== ey) && guard-- > 0) {
+      if (tMaxX < tMaxY) {
+        cx += stepX;
+        tMaxX += tDeltaX;
+      } else if (tMaxY < tMaxX) {
+        cy += stepY;
+        tMaxY += tDeltaY;
+      } else {
+        // exact corner crossing: treat as supercover — both adjacent cells
+        // must be clear or the segment grazes a wall
+        if (this.blocked.has(this.key(cx + stepX, cy)) || this.blocked.has(this.key(cx, cy + stepY))) {
+          return false;
+        }
+        cx += stepX;
+        cy += stepY;
+        tMaxX += tDeltaX;
+        tMaxY += tDeltaY;
+      }
+      if (this.blocked.has(this.key(cx, cy))) return false;
     }
     return true;
+  }
+
+  /** Nearest walkable cell center to (x,y), spiraling out up to maxRings cells.
+   * Returns null if everything nearby is blocked. */
+  nearestWalkable(x: number, y: number, maxRings = 6): PathPoint | null {
+    const c = this.cellSize;
+    const [cx, cy] = this.cellOf(x, y);
+    if (!this.blocked.has(this.key(cx, cy))) return { x, y };
+    for (let r = 1; r <= maxRings; r++) {
+      let best: PathPoint | null = null;
+      let bestD = Infinity;
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dy = -r; dy <= r; dy++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
+          if (this.blocked.has(this.key(cx + dx, cy + dy))) continue;
+          const px = (cx + dx + 0.5) * c;
+          const py = (cy + dy + 0.5) * c;
+          const d = Math.hypot(px - x, py - y);
+          if (d < bestD) {
+            bestD = d;
+            best = { x: px, y: py };
+          }
+        }
+      }
+      if (best) return best;
+    }
+    return null;
   }
 
   /**
@@ -74,6 +147,12 @@ export class NavGrid {
    * `maxExpand` cell expansions.
    */
   findPath(x0: number, y0: number, x1: number, y1: number, maxExpand = 2000): PathPoint[] | null {
+    // blocked goal (target hugging a wall) → route to the nearest walkable
+    // cell instead of giving up
+    const goal = this.nearestWalkable(x1, y1);
+    if (!goal) return null;
+    x1 = goal.x;
+    y1 = goal.y;
     if (this.lineClear(x0, y0, x1, y1)) return [{ x: x1, y: y1 }];
     const c = this.cellSize;
     const [sx, sy] = this.cellOf(x0, y0);
@@ -93,6 +172,8 @@ export class NavGrid {
       let bi = 0;
       for (let i = 1; i < open.length; i++) if (open[i].f < open[bi].f) bi = i;
       const cur = open.splice(bi, 1)[0];
+      // lazy deletion: skip stale duplicates so they don't burn the budget
+      if (cur.g > (gScore.get(this.key(cur.cx, cur.cy)) ?? Infinity)) continue;
       expanded++;
       if (cur.cx === gx && cur.cy === gy) {
         // reconstruct
@@ -126,7 +207,7 @@ export class NavGrid {
         if (this.blocked.has(nk)) continue;
         // no diagonal corner-cutting
         if (dx && dy && (this.blocked.has(this.key(cur.cx + dx, cur.cy)) || this.blocked.has(this.key(cur.cx, cur.cy + dy)))) continue;
-        const ng = cur.g + (dx && dy ? 1.414 : 1);
+        const ng = cur.g + (dx && dy ? Math.SQRT2 : 1); // admissible vs Euclidean h
         if (ng < (gScore.get(nk) ?? Infinity)) {
           gScore.set(nk, ng);
           came.set(nk, this.key(cur.cx, cur.cy));

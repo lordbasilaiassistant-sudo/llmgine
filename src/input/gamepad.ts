@@ -32,13 +32,20 @@ export class GamepadInput {
       this.state.y = 0;
       return;
     }
-    const [x, y] = [pad.axes[0] ?? 0, pad.axes[1] ?? 0];
-    const mag = Math.hypot(x, y);
-    if (mag > this.deadzone) {
-      const k = Math.min(1, (mag - this.deadzone) / (1 - this.deadzone)) / (mag || 1);
-      this.state.x = x * k;
-      this.state.y = y * k;
-      this.state.active = true;
+    // Only trust axes 0/1 as "left stick" on standard-mapping pads — flight
+    // sticks / odd BT pads map arbitrary axes there. Buttons still work.
+    if (pad.mapping === "standard") {
+      const [x, y] = [pad.axes[0] ?? 0, pad.axes[1] ?? 0];
+      const mag = Math.hypot(x, y);
+      if (mag > this.deadzone) {
+        const k = Math.min(1, (mag - this.deadzone) / (1 - this.deadzone)) / (mag || 1);
+        this.state.x = x * k;
+        this.state.y = y * k;
+        this.state.active = true;
+      } else {
+        this.state.x = 0;
+        this.state.y = 0;
+      }
     } else {
       this.state.x = 0;
       this.state.y = 0;

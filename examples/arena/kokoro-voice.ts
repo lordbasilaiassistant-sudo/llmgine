@@ -44,11 +44,15 @@ export class KokoroVoice implements VoiceService {
     return this.loading;
   }
 
-  speak(text: string, _opts?: SpeakOptions): void {
+  speak(text: string, opts?: SpeakOptions): void {
     if (!this.tts || !text.trim()) return;
     this.queue = this.queue
       .then(async () => {
-        const audio = await this.tts.generate(text, { voice: this.voice });
+        // kokoro-js honors voice + speed; it has no pitch control (rate ≈ SpeakOptions.rate)
+        const audio = await this.tts.generate(text, {
+          voice: opts?.voiceId ?? this.voice,
+          speed: opts?.rate ?? 1,
+        });
         const blob: Blob = await audio.toBlob();
         const url = URL.createObjectURL(blob);
         const el = new Audio(url);

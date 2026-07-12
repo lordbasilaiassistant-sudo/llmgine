@@ -9,8 +9,9 @@
  * toolchains (Electron, Capacitor) become devDependencies of YOUR game
  * project, never of the engine.
  */
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, writeFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const [, , cmd, ...args] = process.argv;
 
@@ -28,10 +29,59 @@ function gameName(): string {
   }
 }
 
+/**
+ * Locate the llmgine engine root this CLI is running FROM (a clone's dist/ or
+ * an installed copy) by walking up from this module until a package.json named
+ * "llmgine" is found. Returns null if we can't tell.
+ */
+export function findEngineRoot(moduleUrl: string = import.meta.url): string | null {
+  try {
+    let dir = dirname(fileURLToPath(moduleUrl));
+    for (let i = 0; i < 8; i++) {
+      const pkg = join(dir, "package.json");
+      if (existsSync(pkg)) {
+        try {
+          if (JSON.parse(readFileSync(pkg, "utf8")).name === "llmgine") return dir;
+        } catch { /* unreadable package.json — keep walking */ }
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch { /* non-file URL etc. */ }
+  return null;
+}
+
+/**
+ * The dependency spec a scaffolded game should use for "llmgine".
+ * The package is not on npm yet, so when the CLI runs from a clone we emit a
+ * `file:` link to that clone; "latest" is only the published-install fallback.
+ */
+export function engineDependencySpec(projectDir: string): string {
+  const root = findEngineRoot();
+  if (root && !root.split(sep).includes("node_modules")) {
+    // running from a clone/dist — link the scaffold to it
+    const rel = relative(projectDir, root);
+    const spec = isAbsolute(rel) || rel === ""
+      ? root.split(sep).join("/") // cross-drive (or same dir): absolute path
+      : rel.split(sep).join("/");
+    return "file:" + spec;
+  }
+  if (!root) {
+    console.warn(
+      '  ! could not locate the llmgine engine on disk — emitting "llmgine": "latest".\n' +
+      "    llmgine is NOT published to npm yet, so `npm install` will 404 until it is.\n" +
+      "    Run `llmgine create` from a clone of the engine to get a working file: link.",
+    );
+  }
+  return "latest";
+}
+
 // ── create ──────────────────────────────────────────────────────
 export function create(name: string, dir = resolve(name)): void {
   if (existsSync(join(dir, "package.json"))) throw new Error(`${dir} already has a project`);
   mkdirSync(dir, { recursive: true });
+  const engineSpec = engineDependencySpec(dir);
   write(join(dir, "package.json"), JSON.stringify({
     name,
     version: "0.1.0",
@@ -41,7 +91,7 @@ export function create(name: string, dir = resolve(name)): void {
       build: "esbuild src/main.ts --bundle --format=esm --outfile=public/main.js",
       dev: "npm run build && npx llmgine-dev-server public",
     },
-    dependencies: { llmgine: "latest" },
+    dependencies: { llmgine: engineSpec },
     devDependencies: { esbuild: "^0.28.0", typescript: "^5.6.0" },
   }, null, 2));
   write(join(dir, "tsconfig.json"), JSON.stringify({
@@ -107,6 +157,9 @@ new GameLoop(world, { render: (a) => renderer.draw(world, a) }).start();
 `);
   write(join(dir, "README.md"), `# ${name}\n\nBuilt on [llmgine](https://github.com/lordbasilaiassistant-sudo/llmgine).\n\n\`\`\`bash\nnpm install\nnpm run dev   # http://localhost:4173\nnpx llmgine export windows|android|ios|pwa|store\n\`\`\`\n`);
   console.log(`\ncreated ${name}. next: cd ${name} && npm install && npm run dev`);
+  if (engineSpec.startsWith("file:")) {
+    console.log(`  (engine linked from ${engineSpec.slice(5)} — if its dist/ is missing, run \`npm run build\` there first)`);
+  }
 }
 
 // ── export targets ──────────────────────────────────────────────
@@ -258,8 +311,18 @@ export function main(): void {
   }
 }
 
-// run when invoked directly (not imported by tests)
-if (process.argv[1] && /cli[\\/](index|cli)\.(ts|js)$/.test(process.argv[1])) {
+// run when invoked directly (not imported by tests).
+// realpath first: on Unix the `llmgine` bin is a node_modules/.bin symlink
+// that doesn't match the pattern until resolved to dist/cli/index.js.
+const argvPath = (() => {
+  const p = process.argv[1] ?? "";
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+})();
+if (argvPath && /cli[\\/](index|cli)\.(ts|js)$/.test(argvPath)) {
   try {
     main();
   } catch (err: any) {

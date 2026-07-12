@@ -23,8 +23,8 @@ export interface Renderer {
 
 /** No-op renderer for tests, servers, and MCP headless simulation. */
 export class HeadlessRenderer implements Renderer {
-  draw(): void {}
-  capture(): string | null {
+  draw(_world: World, _alpha: number): void {}
+  capture(_world: World, _x: number, _y: number, _radius: number): string | null {
     return null;
   }
 }

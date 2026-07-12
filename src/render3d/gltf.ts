@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { ModelFactory } from "./three.js";
+import { markSharedAssets } from "./three.js";
 import { Velocity } from "../components.js";
 
 /**
@@ -11,9 +13,11 @@ import { Velocity } from "../components.js";
  *     scale: 20, walkClip: "Walk", idleClip: "Idle",
  *   }));
  *
- * Each entity gets its own clone (SkeletonUtils-free shallow clone is enough
- * for separate transforms; animated skinned meshes share skeletons — for
- * per-entity skinned animation import SkeletonUtils and pass `clone`).
+ * Each entity gets its own SkeletonUtils clone (correct for skinned meshes;
+ * plain hierarchies clone identically). Clones share the loaded asset's
+ * geometry/materials/textures — loadGLTF tags those as shared so per-entity
+ * disposal in ThreeRenderer (death, kind swap) never frees a sibling's GPU
+ * buffers.
  */
 
 export interface LoadedGLTF {
@@ -24,6 +28,7 @@ export interface LoadedGLTF {
 export async function loadGLTF(url: string): Promise<LoadedGLTF> {
   const loader = new GLTFLoader();
   const gltf = await loader.loadAsync(url);
+  markSharedAssets(gltf.scene);
   return { scene: gltf.scene, animations: gltf.animations };
 }
 
@@ -43,7 +48,7 @@ export interface GltfModelOptions {
 export function gltfModel(asset: LoadedGLTF, opts: GltfModelOptions = {}): ModelFactory {
   return () => {
     const root = new THREE.Group();
-    const inst = (opts.clone ?? ((s: THREE.Group) => s.clone(true)))(asset.scene);
+    const inst = (opts.clone ?? ((s: THREE.Group) => skeletonClone(s)))(asset.scene);
     inst.scale.setScalar(opts.scale ?? 1);
     inst.position.y = opts.yOffset ?? 0;
     root.add(inst);
@@ -74,13 +79,21 @@ export function gltfModel(asset: LoadedGLTF, opts: GltfModelOptions = {}): Model
       if (v && speed > 8) heading = Math.atan2(v.vx, v.vy);
       inst.rotation.y = heading;
       if (mixer) {
-        if (walk && idle) {
-          const moving = speed > 8;
+        const moving = speed > 8;
+        if (walk) {
           walk.enabled = true;
-          idle.enabled = true;
-          walk.setEffectiveWeight(moving ? 1 : 0);
-          idle.setEffectiveWeight(moving ? 0 : 1);
+          if (idle) {
+            walk.setEffectiveWeight(moving ? 1 : 0);
+          } else {
+            // walk-only asset: keep the clip posed, freeze it when standing
+            walk.setEffectiveWeight(1);
+            walk.paused = !moving;
+          }
           if (moving && !walk.isRunning()) walk.play();
+        }
+        if (idle) {
+          idle.enabled = true;
+          idle.setEffectiveWeight(moving && walk ? 0 : 1);
         }
         mixer.update(dt);
       }

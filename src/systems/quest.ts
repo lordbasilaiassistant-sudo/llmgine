@@ -91,8 +91,11 @@ export function questSystem(): System {
                 for (const j of world.events.journal) {
                   if (j.type !== "speech") continue;
                   if (j.payload?.entity === holder) continue;
-                  // match on speaker name via event describers' payload (games can also emit quest:talk)
-                  if (!obj.match || j.payload?.name === obj.match) q.progress[i] = obj.count;
+                  // one increment per speech event — "talk to 3 villagers"
+                  // must not complete on the first conversation
+                  if (!obj.match || j.payload?.name === obj.match) {
+                    q.progress[i] = Math.min(obj.count, q.progress[i] + 1);
+                  }
                 }
                 break;
             }
@@ -107,12 +110,15 @@ export function questSystem(): System {
                 if (existing) existing.qty += item.qty;
                 else inv.items.push({ id: item.id, name: item.name, qty: item.qty });
               }
+            } else if (q.quest.rewards.items.length) {
+              console.warn(`quest "${q.quest.id}": holder has no Inventory — rewards not granted`);
             }
             world.events.emit("quest:completed", {
               entity: holder,
               id: q.quest.id,
               name: q.quest.name,
               rewards: q.quest.rewards,
+              rewardsGranted: !!inv,
             });
           }
         }

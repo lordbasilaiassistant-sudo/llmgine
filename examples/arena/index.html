@@ -95,6 +95,7 @@
     letter-spacing: 0.18em; font-size: 9.5px; color: var(--dim);
   }
   #mind .badge.live { border-color: var(--player); color: var(--player); }
+  #mind .badge.dead { border-color: var(--oxblood); color: var(--oxblood); }
   #mind button {
     margin-top: 7px; margin-left: 6px; background: none; border: 1px solid rgba(232,220,200,0.25);
     color: var(--dim); font: inherit; font-size: 10px; padding: 4px 9px;
@@ -121,6 +122,18 @@
   }
   #banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   #banner small { display: block; font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: 0.2em; color: var(--dim); margin-top: 10px; }
+
+  /* ── restart (shown when the arena claims you) ────────────── */
+  #btn-restart {
+    top: 58%; left: 50%; transform: translateX(-50%);
+    pointer-events: auto; cursor: pointer;
+    font-family: Cinzel, serif; font-weight: 700; font-size: 15px; letter-spacing: 0.28em;
+    color: var(--gilt); background: rgba(26, 20, 32, 0.88);
+    border: 1px solid var(--gilt); padding: 13px 36px;
+    text-shadow: 0 0 14px rgba(212, 162, 78, 0.5);
+    box-shadow: 0 0 34px rgba(212, 162, 78, 0.18);
+  }
+  #btn-restart:hover, #btn-restart:focus-visible { background: rgba(212, 162, 78, 0.14); outline: none; }
 
   /* ── key modal ────────────────────────────────────────────── */
   #keymodal {
@@ -177,11 +190,12 @@
 
 <div class="hud" id="vitals">
   <div class="hp-wrap"><div class="hp" id="player-hp"></div></div>
-  <div class="keys">WASD/stick move · CLICK / SPACE strike · F5 save · F9 load</div>
+  <div class="keys">WASD/stick move · CLICK / SPACE strike · F5 save · F9 load · R restart</div>
 </div>
 
 <div class="hud" id="satchel"><div id="satchel-list"></div></div>
 <div class="hud" id="banner"></div>
+<button class="hud" id="btn-restart" style="display:none">FIGHT AGAIN — R</button>
 
 <div id="keymodal">
   <div class="panel">

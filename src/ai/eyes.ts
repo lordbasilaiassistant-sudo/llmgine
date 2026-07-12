@@ -27,8 +27,9 @@ export interface Perception {
     id: Entity;
     name: string;
     hp?: string;
-    x: number;
-    y: number;
+    /** Absent for disembodied minds (factions, weather, directors). */
+    x?: number;
+    y?: number;
   };
   nearby: PerceivedEntity[];
   /** Notable events since the last thought (damage, deaths, speech, actions). */
@@ -55,10 +56,13 @@ export function buildPerception(
   range: number,
   sinceTick = 0,
 ): Perception {
-  const t = world.require(self, Transform);
+  // Disembodied minds (a faction, the weather, a drop-table director) have
+  // no Transform — they still think, they just have no spatial neighborhood.
+  const t = world.get(self, Transform);
   const nearby: PerceivedEntity[] = [];
 
-  for (const e of grid.near(t.x, t.y, range)) {
+  for (const e of t ? grid.near(t.x, t.y, range) : []) {
+    if (!t) break;
     if (e === self || !world.isAlive(e)) continue;
     const et = world.get(e, Transform);
     if (!et) continue;
@@ -100,8 +104,7 @@ export function buildPerception(
       id: self,
       name: world.get(self, Named)?.name ?? `entity#${self}`,
       hp: hpStr(world, self),
-      x: Math.round(t.x),
-      y: Math.round(t.y),
+      ...(t ? { x: Math.round(t.x), y: Math.round(t.y) } : {}),
     },
     nearby: nearby.slice(0, 12),
     events: events.slice(-10),

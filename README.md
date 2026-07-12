@@ -30,9 +30,40 @@ async, and non-deterministic. llmgine resolves it structurally:
 
 ## Quickstart
 
+> **Requires Node >= 18.** llmgine is **not published to npm yet** — today you
+> run it from a clone (which works end-to-end); `npm install llmgine` will
+> work once it's published.
+
+**From a clone (the working path today):**
+
 ```bash
-npm install llmgine
+git clone https://github.com/lordbasilaiassistant-sudo/llmgine
+cd llmgine
+npm install
+npm run build       # engine → dist/
+npm test            # unit tests, no network (pretest rebuilds dist/ automatically)
+npm run demo        # the 3D arena demo → http://localhost:4173
 ```
+
+Optional: copy [.env.example](./.env.example) to `.env` and add a `ZAI_API_KEY`
+to give minds a live model (see below) — the demo auto-detects it locally.
+
+**Start your own game** — scaffold from the clone; the generated project links
+back to it with a `file:` dependency (no npm registry needed):
+
+```bash
+node dist/cli/index.js create my-game    # from the clone root
+cd my-game && npm install && npm run dev # http://localhost:4173
+```
+
+**From npm (once published):**
+
+```bash
+npm install llmgine        # not yet — 404s today, tracked for a deliberate release
+npx llmgine create my-game
+```
+
+What the code looks like:
 
 ```ts
 import {
@@ -109,16 +140,44 @@ npm run demo        # http://localhost:4173 — auto-detects ZAI_API_KEY locally
 ## For AI agents: the MCP server
 
 The engine ships as an [MCP](https://modelcontextprotocol.io) tool so agents
-can build and test games headlessly:
+can build and test games headlessly. Claude Code auto-connects via the repo's
+[.mcp.json](./.mcp.json) when opened inside a built clone; any other client:
 
 ```json
-{ "mcpServers": { "llmgine": { "command": "npx", "args": ["llmgine-mcp"], "env": { "ZAI_API_KEY": "…" } } } }
+{ "mcpServers": { "llmgine": { "command": "node", "args": ["<path-to-clone>/dist/mcp/server.js"], "env": { "ZAI_API_KEY": "…" } } } }
 ```
 
-Tools: `create_world`, `define_prefab`, `define_loot_table`, `spawn`, `act`,
-`run` (advance N ticks → event log), `query_world`, `generate_prefab`
-(Genesis). An agent can design a boss, simulate 10 seconds of combat, and read
-the death/loot events back — no browser, no human in the loop.
+Tools: `create_world`, `define_prefab`, `define_loot_table`, `list_prefabs`,
+`spawn`, `attach_mind`, `act`, `run` (advance N ticks → event log),
+`query_world`, `save_world`, `load_world`, `destroy_world`, `generate_prefab`
+(Genesis). An agent can design a boss, attach a mind to it, simulate 10
+seconds of combat, and read the death/loot events back — no browser, no human
+in the loop. Full walkthrough: [docs/mcp.md](./docs/mcp.md).
+
+## Build (and play) games with your agent
+
+Agents are first-class players here, not just builders. Every game can wire an
+**AgentPort** (`llmgine/agent`) — observe/act/step/save through the exact same
+Eyes-perception + validated-verb pipeline the LLM Minds use. In a browser it's
+`window.llmgine`; with the dev server running, any local process can drive the
+live game over HTTP:
+
+```bash
+curl -s localhost:4173/agent/call -d '{"method":"observe"}'
+curl -s localhost:4173/agent/call -d '{"method":"act","args":["move_to",{"x":0,"y":-100}]}'
+curl -s localhost:4173/agent/call -d '{"method":"step","args":[120]}'   # deterministic 2s
+curl -s localhost:4173/agent/call -d '{"method":"actionLog"}'           # why was my verb rejected?
+```
+
+`step()` pauses real time and advances the fixed-timestep sim — agent
+playtests are reproducible. Rejected actions carry the validator's reason.
+
+Give your agent the **skill file** at
+[skills/llmgine/SKILL.md](./skills/llmgine/SKILL.md) (drop it into
+`.claude/skills/` for Claude Code) — it teaches the architecture contract, the
+build loop, the gotcha ledger, and the verify loop. `npm run agent:verify`
+runs the headless engine acceptance (determinism, adversarial verb rejection,
+LLM-down fallback) in seconds.
 
 ## What's in the box
 
@@ -131,7 +190,11 @@ the death/loot events back — no browser, no human in the loop.
 | `render` | headless renderer (tests/servers/MCP) + canvas 2D (prototyping/minigames) |
 | `mcp` | the engine as an agent tool |
 
-Full design: [ARCHITECTURE.md](./ARCHITECTURE.md).
+Full design: [ARCHITECTURE.md](./ARCHITECTURE.md). Focused guides in
+[docs/](./docs/README.md): [input](./docs/input.md) (touch + gamepad) ·
+[audio](./docs/audio.md) · [save/load](./docs/save-load.md) ·
+[navigation](./docs/nav.md) · [projectiles](./docs/projectiles.md) ·
+[glTF models](./docs/gltf.md) · [MCP server](./docs/mcp.md).
 
 ## Honest status (v0.1)
 
@@ -148,8 +211,10 @@ combat, NavGrid A* pathfinding (behavior routes around obstacles), save slots
 (F5/F9 quicksave in the demo), glTF model helpers, and a provider-level repair
 for GLM flash's malformed tool calls (captured live, unit-tested).
 
-**Also works (tested):** `npx llmgine create <name>` scaffolds a playable
-starter game; `npx llmgine export windows|android|ios|pwa|store` generates the
+**Also works (tested):** `llmgine create <name>` (run from a clone:
+`node dist/cli/index.js create <name>`) scaffolds a starter game that installs
+and builds against the clone via a `file:` link — proven end-to-end
+(create → npm install → build). `llmgine export windows|android|ios|pwa|store` generates the
 Electron/.exe config, Capacitor mobile config, installable PWA, and a store
 listing kit (assets checklist, pricing worksheet, AI disclosure) — generator
 output is covered by CLI subprocess tests. The heavy toolchains run in *your*

@@ -1,6 +1,7 @@
 import type { World } from "../core/ecs.js";
 import { Health, Named, Speech, Sprite, Transform } from "../components.js";
 import type { Renderer } from "./renderer.js";
+import { TransformLerp } from "./interp.js";
 
 export interface Camera {
   x: number;
@@ -42,6 +43,9 @@ export class Canvas2DRenderer implements Renderer {
   private ctx: CanvasRenderingContext2D;
   private skins = new Map<string, Skin>();
   private images = new Map<string, HTMLImageElement>();
+  private xf = new TransformLerp();
+  /** Device-pixel-ratio backing scale. 1 until resize() is called (back-compat). */
+  private dpr = 1;
 
   constructor(
     readonly canvas: HTMLCanvasElement,
@@ -71,24 +75,26 @@ export class Canvas2DRenderer implements Renderer {
     return this;
   }
 
+  /**
+   * Size the canvas in CSS pixels; the backing buffer is scaled by
+   * devicePixelRatio (capped at 2) so the render is crisp on HiDPI screens.
+   * World/UI coordinates stay in CSS pixels.
+   */
   resize(width: number, height: number): void {
-    this.canvas.width = width;
-    this.canvas.height = height;
+    this.dpr = Math.min(globalThis.devicePixelRatio ?? 1, 2);
+    this.canvas.width = Math.round(width * this.dpr);
+    this.canvas.height = Math.round(height * this.dpr);
+    this.canvas.style.width = `${width}px`;
+    this.canvas.style.height = `${height}px`;
   }
 
   private applyCamera(): void {
     const { width, height } = this.canvas;
-    this.ctx.setTransform(
-      this.camera.zoom,
-      0,
-      0,
-      this.camera.zoom,
-      width / 2 - this.camera.x * this.camera.zoom,
-      height / 2 - this.camera.y * this.camera.zoom,
-    );
+    const z = this.camera.zoom * this.dpr;
+    this.ctx.setTransform(z, 0, 0, z, width / 2 - this.camera.x * z, height / 2 - this.camera.y * z);
   }
 
-  draw(world: World): void {
+  draw(world: World, alpha = 1): void {
     const ctx = this.ctx;
     const { width, height } = this.canvas;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -98,11 +104,18 @@ export class Canvas2DRenderer implements Renderer {
     this.applyCamera();
     this.opts.drawUnder?.(ctx, world);
 
-    // gather + sort by layer then y (painter's order)
+    // gather (interpolating prev tick → current tick by alpha) + sort by
+    // layer then y (painter's order)
+    const seen = new Set<number>();
     const drawables: Array<{ e: number; t: any; s: any }> = [];
     for (const e of world.query(Transform, Sprite)) {
-      drawables.push({ e, t: world.require(e, Transform), s: world.require(e, Sprite) });
+      seen.add(e);
+      const raw = world.require(e, Transform);
+      this.xf.sample(e, raw.x, raw.y, raw.rot);
+      const t = this.xf.at(e, alpha) ?? raw;
+      drawables.push({ e, t, s: world.require(e, Sprite) });
     }
+    this.xf.prune(seen);
     drawables.sort((a, b) => a.s.layer - b.s.layer || a.t.y - b.t.y);
 
     for (const { e, t, s } of drawables) {
@@ -123,18 +136,22 @@ export class Canvas2DRenderer implements Renderer {
         ctx.restore();
         continue;
       }
-      // image sprite
+      // image sprite (rotated to face Transform.rot; 0 = +x)
       if (s.kind.startsWith("image:")) {
         const img = this.images.get(s.kind.slice(6));
         if (img?.complete && img.naturalWidth) {
+          ctx.save();
+          ctx.rotate(t.rot);
           ctx.drawImage(img, -r, -r, s.size, s.size);
+          ctx.restore();
           this.drawStatus(ctx, world, e, s, r);
           ctx.restore();
           continue;
         }
       }
-      // body with soft glow
+      // body with soft glow (built-in shapes face Transform.rot)
       ctx.save();
+      ctx.rotate(t.rot);
       ctx.shadowColor = s.color;
       ctx.shadowBlur = s.size * 0.7;
       ctx.fillStyle = s.color;
@@ -156,11 +173,14 @@ export class Canvas2DRenderer implements Renderer {
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.fill();
       if (s.glyph) {
+        ctx.save();
+        ctx.rotate(t.rot);
         ctx.font = `${Math.round(s.size * 0.72)}px system-ui, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillStyle = "rgba(13,10,18,0.82)";
         ctx.fillText(s.glyph, 0, 1);
+        ctx.restore();
       }
       this.drawStatus(ctx, world, e, s, r);
       ctx.restore();
@@ -169,7 +189,7 @@ export class Canvas2DRenderer implements Renderer {
     // speech bubbles (world space, above entities)
     for (const [e, sp] of world.each(Speech)) {
       if (!sp.text || sp.ttl <= 0) continue;
-      const t = world.get(e, Transform);
+      const t = this.xf.at(e, alpha) ?? world.get(e, Transform);
       if (!t) continue;
       const s = world.get(e, Sprite);
       const name = world.get(e, Named)?.name ?? "";
@@ -199,7 +219,8 @@ export class Canvas2DRenderer implements Renderer {
 
     this.opts.drawOver?.(ctx, world);
 
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // UI space stays CSS pixels regardless of the HiDPI backing scale
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.opts.drawUI?.(ctx, world);
   }
 
@@ -223,16 +244,20 @@ export class Canvas2DRenderer implements Renderer {
 
   /** Crop the current frame around a world point — the Eyes "pixels" feed. */
   capture(world: World, x: number, y: number, radius: number): string | null {
-    const z = this.camera.zoom;
-    const sx = this.canvas.width / 2 + (x - this.camera.x) * z - radius * z;
-    const sy = this.canvas.height / 2 + (y - this.camera.y) * z - radius * z;
-    const size = radius * 2 * z;
-    const out = typeof document !== "undefined" ? document.createElement("canvas") : null;
-    if (!out) return null;
-    out.width = out.height = Math.min(512, Math.max(64, Math.round(size)));
-    const octx = out.getContext("2d");
-    if (!octx) return null;
-    octx.drawImage(this.canvas, sx, sy, size, size, 0, 0, out.width, out.height);
-    return out.toDataURL("image/png");
+    try {
+      const z = this.camera.zoom * this.dpr;
+      const sx = this.canvas.width / 2 + (x - this.camera.x) * z - radius * z;
+      const sy = this.canvas.height / 2 + (y - this.camera.y) * z - radius * z;
+      const size = radius * 2 * z;
+      const out = typeof document !== "undefined" ? document.createElement("canvas") : null;
+      if (!out) return null;
+      out.width = out.height = Math.min(512, Math.max(64, Math.round(size)));
+      const octx = out.getContext("2d");
+      if (!octx) return null;
+      octx.drawImage(this.canvas, sx, sy, size, size, 0, 0, out.width, out.height);
+      return out.toDataURL("image/png"); // throws on tainted canvas — return null instead
+    } catch {
+      return null;
+    }
   }
 }

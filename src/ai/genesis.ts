@@ -43,30 +43,40 @@ export class Genesis {
     const key = opts.cacheKey ? this.cache.key(opts.cacheKey) : null;
     if (key) {
       const hit = this.cache.get(key);
-      if (hit) return validate(JSON.parse(hit));
+      if (hit) {
+        try {
+          return validate(JSON.parse(hit));
+        } catch {
+          // poisoned entry (validators changed, bad write) — drop it and
+          // regenerate instead of failing this key forever
+          this.cache.delete(key);
+        }
+      }
     }
 
     let feedback = "";
     let lastErr: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
-      const res = await this.opts.provider.chat({
-        tier: this.tier,
-        json: true,
-        temperature: opts.temperature ?? 0.9,
-        maxTokens: 900,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You generate game content as JSON. Reply with ONLY a single JSON object — no prose, no markdown fences.",
-          },
-          {
-            role: "user",
-            content: `${task}\n\nRequired JSON shape:\n${shape}${feedback ? `\n\nYour previous attempt was rejected: ${feedback}\nFix it and reply with corrected JSON only.` : ""}`,
-          },
-        ],
-      });
+      // the provider call sits INSIDE the retry loop's error handling — a
+      // transient 429/500/timeout burns one attempt, not the whole call
       try {
+        const res = await this.opts.provider.chat({
+          tier: this.tier,
+          json: true,
+          temperature: opts.temperature ?? 0.9,
+          maxTokens: 900,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You generate game content as JSON. Reply with ONLY a single JSON object — no prose, no markdown fences.",
+            },
+            {
+              role: "user",
+              content: `${task}\n\nRequired JSON shape:\n${shape}${feedback ? `\n\nYour previous attempt was rejected: ${feedback}\nFix it and reply with corrected JSON only.` : ""}`,
+            },
+          ],
+        });
         let parsed = extractJSON(res.text);
         // tolerate single-key envelopes like {"answer": {...}} or {"prefab": {...}}
         const keys = parsed && typeof parsed === "object" ? Object.keys(parsed) : [];
@@ -102,7 +112,9 @@ export class Genesis {
       `Design a game entity prefab: ${description}${constraints ? `\nConstraints: ${constraints}` : ""}\nUse ONLY these components (any subset) with sensible values:\n${known}`,
       `{"name": "kebab-case-id", "components": {"ComponentName": {"key": value}}}`,
       (raw) => this.opts.prefabs.define(raw),
-      { cacheKey: ["prefab", description, constraints] },
+      // tier + component catalog in the key: a different model or a changed
+      // component set must never serve the other's cached prefab
+      { cacheKey: ["prefab", this.tier, description, constraints, known] },
     );
   }
 }

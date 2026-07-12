@@ -10,34 +10,52 @@ export interface BudgetConfig {
   maxConcurrent?: number;
   /** Max total requests for the session (0 = unlimited). Default 0. */
   maxTotal?: number;
+  /** Max tokens per rolling minute (0 = unlimited). Default 0. */
+  tokensPerMinute?: number;
 }
 
 export class InferenceBudget {
   private rpm: number;
   private maxConcurrent: number;
   private maxTotal: number;
+  private tpm: number;
   private stamps: number[] = [];
+  private tokenStamps: Array<[number, number]> = [];
   private inFlight = 0;
   total = 0;
+  totalTokens = 0;
   denied = 0;
 
   constructor(cfg: BudgetConfig = {}) {
     this.rpm = cfg.requestsPerMinute ?? 30;
     this.maxConcurrent = cfg.maxConcurrent ?? 4;
     this.maxTotal = cfg.maxTotal ?? 0;
+    this.tpm = cfg.tokensPerMinute ?? 0;
   }
 
   /** Try to reserve a request slot. Caller MUST release() when done. */
   tryAcquire(now = Date.now()): boolean {
     const cutoff = now - 60_000;
     while (this.stamps.length && this.stamps[0] < cutoff) this.stamps.shift();
+    while (this.tokenStamps.length && this.tokenStamps[0][0] < cutoff) this.tokenStamps.shift();
     if (this.inFlight >= this.maxConcurrent) return this.deny();
     if (this.stamps.length >= this.rpm) return this.deny();
     if (this.maxTotal > 0 && this.total >= this.maxTotal) return this.deny();
+    if (this.tpm > 0) {
+      const spent = this.tokenStamps.reduce((s, [, n]) => s + n, 0);
+      if (spent >= this.tpm) return this.deny();
+    }
     this.stamps.push(now);
     this.inFlight++;
     this.total++;
     return true;
+  }
+
+  /** Record actual token usage from a completed response. */
+  noteUsage(tokens: number, now = Date.now()): void {
+    if (!Number.isFinite(tokens) || tokens <= 0) return;
+    this.totalTokens += tokens;
+    if (this.tpm > 0) this.tokenStamps.push([now, tokens]);
   }
 
   private deny(): false {
@@ -50,7 +68,7 @@ export class InferenceBudget {
   }
 
   stats() {
-    return { total: this.total, denied: this.denied, inFlight: this.inFlight };
+    return { total: this.total, denied: this.denied, inFlight: this.inFlight, totalTokens: this.totalTokens };
   }
 }
 
@@ -61,7 +79,9 @@ export class ResponseCache {
 
   key(parts: unknown[]): string {
     const s = JSON.stringify(parts);
-    // djb2 — good enough for a cache key; collisions just cost a regen
+    // djb2 + length prefix. NOTE: a collision would serve the WRONG cached
+    // response (not "just a regen") — the length prefix makes that
+    // vanishingly unlikely for realistic prompt sets.
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
     return `${s.length}:${h}`;
@@ -69,6 +89,11 @@ export class ResponseCache {
 
   get(k: string): string | undefined {
     return this.map.get(k);
+  }
+
+  /** Drop a poisoned entry (e.g. cached response that fails validation). */
+  delete(k: string): void {
+    this.map.delete(k);
   }
 
   set(k: string, v: string): void {

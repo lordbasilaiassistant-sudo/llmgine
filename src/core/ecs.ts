@@ -21,7 +21,19 @@ export function defineComponent<T extends object>(
 ): ComponentType<T> {
   return {
     name,
-    create: (init?: Partial<T>) => ({ ...defaults(), ...init }),
+    // Only keys present in defaults() are accepted — unknown keys from
+    // untrusted init data (LLM-emitted prefabs, drifted saves) are dropped
+    // rather than injected into component state.
+    create: (init?: Partial<T>) => {
+      const data = defaults();
+      if (init) {
+        for (const k of Object.keys(data) as (keyof T)[]) {
+          const v = (init as any)[k as string];
+          if (v !== undefined) (data as any)[k as string] = v;
+        }
+      }
+      return data;
+    },
   };
 }
 
@@ -49,8 +61,15 @@ type Listener = (payload: any) => void;
  */
 export class EventBus {
   private listeners = new Map<string, Set<Listener>>();
-  /** Journal of events for the current tick. Cleared at the start of each step. */
+  /**
+   * Journal of events for the current tick. NOTE: while systems run, this
+   * only contains events from systems that already ran this tick — a system
+   * can never see same-tick events from later-ordered systems. Use
+   * `lastJournal`/`recent()` for the complete previous tick.
+   */
   journal: Array<{ type: string; payload: any; tick: number }> = [];
+  /** The COMPLETE journal of the previous tick (every system had its turn). */
+  lastJournal: Array<{ type: string; payload: any; tick: number }> = [];
   private tick = 0;
   private inTick = false;
   /** Events emitted between ticks (input handlers, external triggers) land in the NEXT tick's journal. */
@@ -58,13 +77,27 @@ export class EventBus {
 
   beginTick(tick: number): void {
     this.tick = tick;
-    this.journal.length = 0;
+    this.lastJournal = this.journal;
+    this.journal = [];
     this.inTick = true;
     for (const ev of this.offTick) this.journal.push({ ...ev, tick });
     this.offTick.length = 0;
   }
 
   endTick(): void {
+    this.inTick = false;
+  }
+
+  /** Previous tick's full journal + what has landed so far this tick. */
+  recent(): Array<{ type: string; payload: any; tick: number }> {
+    return this.lastJournal.concat(this.journal);
+  }
+
+  /** Drop all journal/off-tick state (used by World.load). */
+  reset(): void {
+    this.journal = [];
+    this.lastJournal = [];
+    this.offTick.length = 0;
     this.inTick = false;
   }
 
@@ -90,7 +123,10 @@ export class Rng {
     this.s = seed >>> 0 || 1;
   }
   next(): number {
-    let t = (this.s += 0x6d2b79f5);
+    // keep state normalized to uint32 — same output (imul truncates anyway),
+    // but getState() stays canonical so identical worlds save identically
+    this.s = (this.s + 0x6d2b79f5) >>> 0;
+    let t = this.s;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
@@ -118,7 +154,7 @@ export class World {
   private alive = new Set<Entity>();
   private stores = new Map<string, Map<Entity, any>>();
   private systems: System[] = [];
-  private pendingDestroy: Entity[] = [];
+  private pendingDestroy = new Set<Entity>();
 
   readonly events = new EventBus();
   readonly rng: Rng;
@@ -140,7 +176,13 @@ export class World {
 
   /** Deferred destroy: applied at end of the current step (safe mid-iteration). */
   destroy(e: Entity): void {
-    if (this.alive.has(e)) this.pendingDestroy.push(e);
+    if (this.alive.has(e)) this.pendingDestroy.add(e);
+  }
+
+  /** True if the entity is alive but scheduled to be destroyed at end of tick.
+   * Validators should treat doomed entities as gone (prevents same-tick dupes). */
+  isDoomed(e: Entity): boolean {
+    return this.pendingDestroy.has(e);
   }
 
   destroyNow(e: Entity): void {
@@ -157,6 +199,22 @@ export class World {
     return this.alive.size;
   }
 
+  /** All entity ids currently alive (snapshot copy). */
+  entities(): Entity[] {
+    return [...this.alive];
+  }
+
+  /** Every component on an entity, keyed by component name (plain data —
+   * safe to serialize; used by debug/agent surfaces). */
+  componentsOf(e: Entity): Record<string, any> {
+    const out: Record<string, any> = {};
+    for (const [name, store] of this.stores) {
+      const c = store.get(e);
+      if (c !== undefined) out[name] = c;
+    }
+    return out;
+  }
+
   // ---- components ----
 
   private store<T>(type: ComponentType<T>): Map<Entity, T> {
@@ -166,6 +224,9 @@ export class World {
   }
 
   add<T>(e: Entity, type: ComponentType<T>, init?: Partial<T>): T {
+    if (!this.alive.has(e)) {
+      throw new Error(`cannot add ${type.name} to dead entity ${e}`);
+    }
     const data = type.create(init);
     this.store(type).set(e, data);
     return data;
@@ -232,9 +293,9 @@ export class World {
     this.events.beginTick(this.tick);
     const ctx: SystemContext = { world: this, dt, tick: this.tick };
     for (const sys of this.systems) sys.update(ctx);
-    if (this.pendingDestroy.length) {
+    if (this.pendingDestroy.size) {
       for (const e of this.pendingDestroy) this.destroyNow(e);
-      this.pendingDestroy.length = 0;
+      this.pendingDestroy.clear();
     }
     this.events.endTick();
   }
@@ -261,7 +322,14 @@ export class World {
     };
   }
 
-  load(snap: WorldSnapshot, types: ComponentType<any>[]): void {
+  /**
+   * Restore a snapshot. Saved component data is passed through each type's
+   * `create()` so fields added since the save get their defaults (schema
+   * migration) and unknown keys are dropped. Returns the names of component
+   * types present in the snapshot but not in `types` — those are NOT restored;
+   * a non-empty result almost always means a missing registration (warned).
+   */
+  load(snap: WorldSnapshot, types: ComponentType<any>[]): { dropped: string[] } {
     const byName = new Map(types.map((t) => [t.name, t]));
     this.nextEntity = snap.nextEntity;
     this.alive = new Set(snap.alive);
@@ -269,12 +337,25 @@ export class World {
     this.time = snap.time;
     this.rng.setState(snap.rng);
     this.stores.clear();
+    this.pendingDestroy.clear();
+    this.events.reset();
+    const dropped: string[] = [];
     for (const [name, rows] of Object.entries(snap.components)) {
-      if (!byName.has(name)) continue; // unknown component types are dropped
+      const type = byName.get(name);
+      if (!type) {
+        dropped.push(name);
+        continue;
+      }
       const store = new Map<Entity, any>();
-      for (const [e, c] of rows) store.set(e, structuredClone(c));
+      for (const [e, c] of rows) store.set(e, type.create(structuredClone(c)));
       this.stores.set(name, store);
     }
+    if (dropped.length) {
+      console.warn(
+        `World.load: dropped unregistered component types: ${dropped.join(", ")} — pass them in the types list to restore them`,
+      );
+    }
+    return { dropped };
   }
 }
 

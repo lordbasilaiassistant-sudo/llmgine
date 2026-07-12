@@ -42,8 +42,10 @@ export function behaviorSystem(nav?: NavGrid): System {
             return steerDirect(x, y, speedMul);
           }
           b.repath -= dt;
+          // an EMPTY path must not count as "goal moved" — that would bypass
+          // the cooldown and rerun a failing A* at 60 Hz per entity
           const goalMoved =
-            b.path.length === 0 ||
+            b.path.length > 0 &&
             Math.hypot(b.path[b.path.length - 1].x - x, b.path[b.path.length - 1].y - y) > nav.cellSize * 1.5;
           if (b.repath <= 0 || goalMoved) {
             b.repath = 0.5;
@@ -149,13 +151,16 @@ export function behaviorSystem(nav?: NavGrid): System {
  * retaliate when hit. Deterministic PvE without any LLM. A Mind can always
  * override by setting a different mode next thought.
  */
-export function aggroSystem(): System {
+export function aggroSystem(nav?: NavGrid): System {
   return {
     name: "aggro",
     order: -20, // before behavior acts on it
     update({ world }) {
-      // retaliation: whoever damaged me becomes my target
-      for (const j of world.events.journal) {
+      // retaliation: whoever damaged me becomes my target.
+      // recent() = previous tick's COMPLETE journal + this tick so far —
+      // combat (order 20) emits after aggro (order -20) ran, so the current
+      // journal alone can never contain this tick's damage events.
+      for (const j of world.events.recent()) {
         if (j.type !== "combat:damaged") continue;
         const victim = j.payload?.target;
         const attacker = j.payload?.source;
@@ -183,6 +188,8 @@ export function aggroSystem(): System {
           if (!ot) continue;
           const d = Math.hypot(ot.x - t.x, ot.y - t.y);
           if (d < bestDist) {
+            // optional line-of-sight gate: no acquiring targets through walls
+            if (nav && !nav.lineClear(t.x, t.y, ot.x, ot.y)) continue;
             bestDist = d;
             best = other;
           }

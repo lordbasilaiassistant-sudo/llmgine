@@ -26,6 +26,49 @@ export interface TouchState {
   active: boolean;
 }
 
+/** Resting-thumb jitter below this normalized magnitude reads as zero. */
+export const JOYSTICK_DEADZONE = 0.12;
+
+/** Selector for touches that belong to the UI, not the game (escape hatch: data-ui). */
+const UI_SELECTOR = "button,input,a,select,textarea,[data-ui]";
+
+/** True when a touch landed on interactive UI — the game must not swallow it. */
+export function isUiTouch(target: EventTarget | null): boolean {
+  return !!(target as Element | null)?.closest?.(UI_SELECTOR);
+}
+
+/**
+ * Which control zone a touch falls in, measured against the ATTACHED
+ * element's bounding rect (not innerWidth — the target may not span the
+ * viewport).
+ */
+export function touchZone(
+  clientX: number,
+  rectLeft: number,
+  rectWidth: number,
+  moveZone: number,
+): "move" | "action" {
+  return clientX - rectLeft < rectWidth * moveZone ? "move" : "action";
+}
+
+/**
+ * Joystick displacement (px from the touch origin) → normalized move vector,
+ * clamped to `radius`, with a dead zone re-scaled so output still spans 0..1.
+ */
+export function joystickVector(
+  dx: number,
+  dy: number,
+  radius: number,
+  deadzone = JOYSTICK_DEADZONE,
+): { x: number; y: number } {
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return { x: 0, y: 0 };
+  const m = Math.min(len, radius) / radius;
+  if (m <= deadzone) return { x: 0, y: 0 };
+  const scaled = (m - deadzone) / (1 - deadzone);
+  return { x: (dx / len) * scaled, y: (dy / len) * scaled };
+}
+
 export class TouchControls {
   readonly state: TouchState = { x: 0, y: 0, active: false };
   private moveId: number | null = null;
@@ -71,9 +114,15 @@ export class TouchControls {
   }
 
   private start(e: TouchEvent): void {
+    const rect = this.target.getBoundingClientRect();
+    const width = rect.width || innerWidth;
     for (const t of Array.from(e.changedTouches)) {
-      if (t.clientX < innerWidth * this.opts.moveZone && this.moveId === null) {
-        e.preventDefault();
+      // touches on buttons/inputs/links (or anything inside [data-ui]) belong
+      // to the UI — never preventDefault them or swing the sword
+      if (isUiTouch(t.target)) continue;
+      e.preventDefault(); // consume game-area touches (stops scroll/zoom mid-game)
+      if (touchZone(t.clientX, rect.left, width, this.opts.moveZone) === "move") {
+        if (this.moveId !== null) continue; // second left-zone touch: consumed, joystick already owned
         this.moveId = t.identifier;
         this.origin = { x: t.clientX, y: t.clientY };
         this.state.active = true;
@@ -84,8 +133,7 @@ export class TouchControls {
           this.knob!.style.left = `${t.clientX}px`;
           this.knob!.style.top = `${t.clientY}px`;
         }
-      } else if (t.clientX >= innerWidth * this.opts.moveZone) {
-        e.preventDefault();
+      } else {
         this.opts.onAction?.();
       }
     }
@@ -97,13 +145,12 @@ export class TouchControls {
       e.preventDefault();
       const dx = t.clientX - this.origin.x;
       const dy = t.clientY - this.origin.y;
-      const len = Math.hypot(dx, dy);
-      const r = this.opts.radius;
-      const k = len > 0 ? Math.min(len, r) / r / (len || 1) : 0;
-      this.state.x = dx * k;
-      this.state.y = dy * k;
+      const v = joystickVector(dx, dy, this.opts.radius);
+      this.state.x = v.x;
+      this.state.y = v.y;
       if (this.knob) {
-        const clamp = Math.min(len, r) / (len || 1);
+        const len = Math.hypot(dx, dy);
+        const clamp = Math.min(len, this.opts.radius) / (len || 1);
         this.knob.style.left = `${this.origin.x + dx * clamp}px`;
         this.knob.style.top = `${this.origin.y + dy * clamp}px`;
       }

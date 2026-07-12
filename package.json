@@ -19,9 +19,25 @@
       "types": "./dist/render/index.d.ts",
       "import": "./dist/render/index.js"
     },
+    "./render3d": {
+      "types": "./dist/render3d/index.d.ts",
+      "import": "./dist/render3d/index.js"
+    },
+    "./audio": {
+      "types": "./dist/audio/index.d.ts",
+      "import": "./dist/audio/index.js"
+    },
+    "./input": {
+      "types": "./dist/input/index.d.ts",
+      "import": "./dist/input/index.js"
+    },
     "./mcp": {
       "types": "./dist/mcp/index.d.ts",
       "import": "./dist/mcp/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "import": "./dist/agent/index.js"
     }
   },
   "bin": {
@@ -32,16 +48,20 @@
   "files": [
     "dist",
     "scripts/dev-server.mjs",
+    "scripts/agent-verify.mjs",
+    "skills",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "pretest": "npm run build",
     "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts",
     "typecheck": "tsc --noEmit",
     "demo:build": "esbuild examples/arena/main.ts --bundle --format=esm --outfile=examples/arena/main.js",
-    "demo": "npm run demo:build && node scripts/dev-server.mjs examples/arena"
+    "demo": "npm run demo:build && node scripts/dev-server.mjs examples/arena",
+    "agent:verify": "node scripts/agent-verify.mjs"
   },
   "keywords": [
     "game-engine",

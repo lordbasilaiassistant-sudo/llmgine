@@ -10,8 +10,17 @@ import { Attack, Behavior, Faction, Health, Named, Transform } from "../componen
  * damage resolution.
  */
 
-/** Apply damage directly (projectiles, traps, scripts use this too). */
+/** Apply damage directly (projectiles, traps, scripts use this too).
+ * Amount must be a positive finite number — NaN would make hp permanently
+ * NaN (unkillable), negative would be an unclamped heal. Healing has its own
+ * paths.
+ *
+ * NOTE: the 0.1 s iframe window is GLOBAL per target, not per attacker —
+ * incoming hits are capped at 10/sec no matter how many attackers, and the
+ * earliest-run system wins the window. Deliberate (readable swarm combat),
+ * but tune `iframes` if a game needs true simultaneous hits. */
 export function dealDamage(world: World, source: Entity, target: Entity, amount: number): void {
+  if (!Number.isFinite(amount) || amount <= 0) return;
   const h = world.get(target, Health);
   if (!h || h.hp <= 0 || h.iframes > 0) return;
   h.hp = Math.max(0, h.hp - amount);

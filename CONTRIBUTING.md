@@ -23,6 +23,11 @@
 
 ## Setup
 
+Requires **Node >= 18**. For LLM-backed features/tests, copy
+[.env.example](./.env.example) to `.env` and set `ZAI_API_KEY` (or any
+OpenAI-compatible `LLM_BASE_URL` + `LLM_API_KEY`) — everything else runs
+offline on deterministic fallbacks.
+
 ```bash
 npm install
 npm test              # unit tests (no network)

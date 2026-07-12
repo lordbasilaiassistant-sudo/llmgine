@@ -22,3 +22,6 @@ export * from "./core/save.js";
 
 // rendering
 export * from "./render/index.js";
+
+// agent play protocol — LLM agents pilot/test/debug games first-class
+export * from "./agent/index.js";

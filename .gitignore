@@ -8,3 +8,4 @@ dist/
 coverage/
 examples/arena/main.js
 dist-desktop/
+.serena/

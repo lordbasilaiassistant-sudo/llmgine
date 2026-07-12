@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "llmgine": {
+      "command": "node",
+      "args": ["dist/mcp/server.js"],
+      "env": {}
+    }
+  }
+}

@@ -47,7 +47,11 @@ export const shootVerb: VerbDef = {
     if (!r) return "you cannot shoot (no Ranged)";
     if (r.ready > 0) return "not ready";
     if (!w.has(a.actor, Transform)) return "nowhere to shoot from";
-    const hasTarget = a.params.target !== undefined && w.isAlive(Number(a.params.target));
+    // a target is only aimable if it has a position
+    const hasTarget =
+      a.params.target !== undefined &&
+      w.isAlive(Number(a.params.target)) &&
+      w.has(Number(a.params.target), Transform);
     const hasPos = a.params.x !== undefined && a.params.y !== undefined;
     return hasTarget || hasPos ? null : "no target";
   },
@@ -63,6 +67,7 @@ export const shootVerb: VerbDef = {
         ty = tt.y;
       }
     }
+    if (!Number.isFinite(tx) || !Number.isFinite(ty)) return; // no aim point survived validation
     const dx = tx - t.x;
     const dy = ty - t.y;
     const d = Math.hypot(dx, dy) || 1;
@@ -83,13 +88,34 @@ export const shootVerb: VerbDef = {
   },
 };
 
-export function projectileSystem(grid: SpatialGrid): System {
+/** Closest approach of point (cx,cy) to segment (ax,ay)→(bx,by); returns [dist, u]. */
+function segDist(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): [number, number] {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const len2 = abx * abx + aby * aby;
+  let u = len2 > 0 ? ((cx - ax) * abx + (cy - ay) * aby) / len2 : 0;
+  u = Math.max(0, Math.min(1, u));
+  return [Math.hypot(ax + abx * u - cx, ay + aby * u - cy), u];
+}
+
+/**
+ * Pass a NavGrid to make projectiles stop on walls/pillars (cover works).
+ * Collision is swept over the tick's travel segment — fast projectiles
+ * cannot tunnel through targets between ticks.
+ */
+export function projectileSystem(grid: SpatialGrid, nav?: import("../core/nav.js").NavGrid): System {
   return {
     name: "projectiles",
     order: 18, // after movement, before melee combat resolution
     update({ world, dt }) {
       for (const [, r] of world.each(Ranged)) {
         if (r.ready > 0) r.ready -= dt;
+      }
+      // widest collider this tick — grid query radius must cover any target,
+      // not an assumed max of 24 units
+      let maxR = 8;
+      for (const [, c] of world.each(Collider)) {
+        if (c.radius > maxR) maxR = c.radius;
       }
       for (const [e, p] of world.each(Projectile)) {
         p.ttl -= dt;
@@ -99,18 +125,35 @@ export function projectileSystem(grid: SpatialGrid): System {
         }
         const t = world.get(e, Transform);
         if (!t) continue;
-        for (const other of grid.near(t.x, t.y, p.hitRadius + 24)) {
+        const v = world.get(e, Velocity);
+        // movement already integrated this tick — sweep from where it was
+        const px = t.x - (v?.vx ?? 0) * dt;
+        const py = t.y - (v?.vy ?? 0) * dt;
+        // walls block shots: cover is real
+        if (nav && !nav.lineClear(px, py, t.x, t.y)) {
+          world.events.emit("projectile:blocked", { projectile: e, x: t.x, y: t.y });
+          world.destroy(e);
+          continue;
+        }
+        const travel = Math.hypot(t.x - px, t.y - py);
+        let hit = 0;
+        let hitU = Infinity;
+        for (const other of grid.near((px + t.x) / 2, (py + t.y) / 2, p.hitRadius + maxR + travel / 2)) {
           if (other === e || other === p.source || !world.isAlive(other)) continue;
           const oh = world.get(other, Health);
           const ot = world.get(other, Transform);
           if (!oh || oh.hp <= 0 || !ot) continue;
           if (p.faction && world.get(other, Faction)?.id === p.faction) continue; // no friendly fire
           const reach = p.hitRadius + (world.get(other, Collider)?.radius ?? 8);
-          if (Math.hypot(ot.x - t.x, ot.y - t.y) <= reach) {
-            dealDamage(world, p.source, other, p.damage);
-            world.destroy(e);
-            break;
+          const [dist, u] = segDist(px, py, t.x, t.y, ot.x, ot.y);
+          if (dist <= reach && (u < hitU || (u === hitU && other < hit))) {
+            hit = other;
+            hitU = u;
           }
+        }
+        if (hit) {
+          dealDamage(world, p.source, hit, p.damage);
+          world.destroy(e);
         }
       }
     },

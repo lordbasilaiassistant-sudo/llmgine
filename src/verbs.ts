@@ -1,6 +1,6 @@
 import type { World } from "./core/ecs.js";
 import type { Action, VerbDef } from "./core/actions.js";
-import { Attack, Behavior, Inventory, Named, Pickup, Speech, Transform, Velocity } from "./components.js";
+import { Attack, Behavior, Faction, Inventory, Named, Pickup, Speech, Transform, Velocity } from "./components.js";
 
 /**
  * Standard verb library — the shared vocabulary of players, scripts, and
@@ -66,6 +66,7 @@ export const followVerb: VerbDef = {
   validate: (w, a) => {
     const base = requireMobile(w, a);
     if (base) return base;
+    if (Number(a.params.target) === a.actor) return "you cannot follow yourself";
     return w.isAlive(Number(a.params.target)) ? null : "no such entity";
   },
   resolve: (w, a) => {
@@ -77,13 +78,20 @@ export const followVerb: VerbDef = {
 
 export const attackVerb: VerbDef = {
   name: "attack",
-  description: "Attack a target entity (chases into range first).",
+  description: "Attack a target entity (chases into range first). Cannot target yourself or your own faction.",
   params: { target: { type: "entity", description: "Entity id to attack", required: true } },
   validate: (w, a) => {
     if (!w.has(a.actor, Attack)) return "you cannot attack (no Attack)";
     const base = requireMobile(w, a);
     if (base) return base;
-    return w.isAlive(Number(a.params.target)) ? null : "no such entity";
+    const target = Number(a.params.target);
+    if (target === a.actor) return "you cannot attack yourself";
+    if (!w.isAlive(target) || w.isDoomed(target)) return "no such entity";
+    // same faction rule as projectiles — no melee friendly fire
+    const af = w.get(a.actor, Faction);
+    const tf = w.get(target, Faction);
+    if (af && tf && af.id === tf.id) return "cannot attack your own faction";
+    return null;
   },
   resolve: (w, a) => {
     const b = w.require(a.actor, Behavior);
@@ -126,11 +134,20 @@ export const pickupVerb: VerbDef = {
   validate: (w, a) => {
     if (!w.has(a.actor, Inventory)) return "you have no inventory";
     const target = Number(a.params.target);
-    if (!w.isAlive(target) || !w.has(target, Pickup)) return "nothing to pick up there";
+    // isDoomed: another actor picked this up earlier THIS tick — the destroy
+    // is deferred, so isAlive alone would let the item be duplicated
+    if (!w.isAlive(target) || w.isDoomed(target) || !w.has(target, Pickup)) {
+      return "nothing to pick up there";
+    }
     const at = w.get(a.actor, Transform);
     const tt = w.get(target, Transform);
     if (!at || !tt) return "unreachable";
     if (Math.hypot(at.x - tt.x, at.y - tt.y) > 48) return "too far away";
+    const inv = w.require(a.actor, Inventory);
+    const item = w.require(target, Pickup).item;
+    if (!inv.items.find((i) => i.id === item.id) && inv.items.length >= inv.capacity) {
+      return "inventory full";
+    }
     return null;
   },
   resolve: (w, a) => {
@@ -139,8 +156,7 @@ export const pickupVerb: VerbDef = {
     const item = w.require(target, Pickup).item;
     const existing = inv.items.find((i) => i.id === item.id);
     if (existing) existing.qty += item.qty;
-    else if (inv.items.length < inv.capacity) inv.items.push({ ...item });
-    else return; // inventory full: item stays (validate could also catch this)
+    else inv.items.push({ ...item }); // capacity checked in validate
     w.destroy(target);
     w.events.emit("item:pickup", { entity: a.actor, item: { ...item } });
   },

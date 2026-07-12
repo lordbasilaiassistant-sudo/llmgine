@@ -47,9 +47,13 @@ export interface ChatRequest {
 }
 
 export interface ChatResponse {
+  /** Assistant message content. NEVER contains chain-of-thought. */
   text: string;
+  /** Hidden reasoning (reasoning_content), when the model emitted it.
+   * Kept separate so cognition can never speak chain-of-thought as dialogue. */
+  reasoning?: string;
   toolCalls: ToolCall[];
-  usage: { promptTokens: number; completionTokens: number };
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number };
   model: string;
 }
 
@@ -99,6 +103,8 @@ export class OpenAICompatibleProvider implements ChatProvider {
   constructor(cfg: OpenAICompatibleConfig = {}) {
     this.baseUrl = (cfg.baseUrl ?? env("LLM_BASE_URL") ?? "https://api.z.ai/api/paas/v4").replace(/\/$/, "");
     this.apiKey = cfg.apiKey ?? env("LLM_API_KEY") ?? env("ZAI_API_KEY") ?? "";
+    // keep the key out of JSON.stringify(provider) / console.dir dumps
+    Object.defineProperty(this, "apiKey", { value: this.apiKey, enumerable: false, writable: true });
     this.models = { ...GLM_DEFAULTS, ...cfg.models };
     this.timeoutMs = cfg.timeoutMs ?? 30_000;
     // bind: calling window.fetch through a field throws "Illegal invocation" in browsers
@@ -152,17 +158,27 @@ export class OpenAICompatibleProvider implements ChatProvider {
         const repaired = repairToolCall(tc.function?.name ?? "", args, req.tools);
         return { id: tc.id ?? "", ...repaired };
       });
-      // reasoning models may leave content empty and answer in reasoning_content
-      const text =
-        (typeof msg.content === "string" && msg.content.trim()) ||
-        (typeof msg.reasoning_content === "string" ? msg.reasoning_content : "") ||
-        "";
+      // Reasoning models may leave content empty and put everything in
+      // reasoning_content. That is chain-of-thought — it must NOT be
+      // returned as `text` (cognition would make the NPC speak it aloud).
+      const text = typeof msg.content === "string" ? msg.content.trim() : "";
+      const reasoning =
+        typeof msg.reasoning_content === "string" ? msg.reasoning_content : undefined;
+      if (!text && !toolCalls.length && reasoning && !this.thinkingControl) {
+        warnOnce(
+          `llmgine: model returned only reasoning_content (empty answer). If this endpoint proxies a GLM/Zhipu reasoning model, pass thinkingControl: true so the engine can disable hidden thinking.`,
+        );
+      }
+      const pt = data.usage?.prompt_tokens ?? 0;
+      const ct = data.usage?.completion_tokens ?? 0;
       return {
         text,
+        reasoning,
         toolCalls,
         usage: {
-          promptTokens: data.usage?.prompt_tokens ?? 0,
-          completionTokens: data.usage?.completion_tokens ?? 0,
+          promptTokens: pt,
+          completionTokens: ct,
+          totalTokens: data.usage?.total_tokens ?? pt + ct,
         },
         model: data.model ?? body.model,
       };
@@ -201,6 +217,14 @@ export function repairToolCall(
   return { name, args: out };
 }
 
+let warned = false;
+function warnOnce(msg: string): void {
+  if (!warned) {
+    warned = true;
+    console.warn(msg);
+  }
+}
+
 function coerce(v: string): string | number | boolean {
   if (v === "true") return true;
   if (v === "false") return false;
@@ -224,7 +248,7 @@ export class MockProvider implements ChatProvider {
     return {
       text: "",
       toolCalls: [],
-      usage: { promptTokens: 0, completionTokens: 0 },
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       model: "mock",
       ...next,
     };

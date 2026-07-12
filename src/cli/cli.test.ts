@@ -4,11 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-/** CLI is exercised as a real process against dist/ (built by pretest below). */
+/** CLI is exercised as a real process against dist/ (built by the `pretest` npm script). */
 const CLI = join(process.cwd(), "dist", "cli", "index.js");
-const hasDist = existsSync(CLI);
+if (!existsSync(CLI)) {
+  // fail LOUDLY instead of silently skipping the whole suite
+  throw new Error(
+    "dist/cli/index.js is missing — run `npm run build` (or `npm test`, whose pretest script builds automatically)",
+  );
+}
 
-describe.skipIf(!hasDist)("llmgine CLI", () => {
+describe("llmgine CLI", () => {
   let dir: string;
   beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "llmgine-cli-"))));
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -20,7 +25,9 @@ describe.skipIf(!hasDist)("llmgine CLI", () => {
       expect(existsSync(join(root, f)), f).toBe(true);
     }
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-    expect(pkg.dependencies.llmgine).toBeDefined();
+    // running from this clone's dist → the scaffold must link back to it, not
+    // to the unpublished npm name ("latest" 404s until we publish)
+    expect(pkg.dependencies.llmgine).toMatch(/^file:/);
     expect(readFileSync(join(root, "src", "main.ts"), "utf8")).toContain("CognitionDriver");
   });
 

@@ -25,6 +25,9 @@ export const Collider = defineComponent("Collider", () => ({
   radius: 12,
   /** Solid colliders push each other apart; non-solid are triggers. */
   solid: true,
+  /** Immovable in collision resolution (walls/pillars). Entities without a
+   * Velocity component are treated as static automatically. */
+  static: false,
 }));
 
 export const Sprite = defineComponent("Sprite", () => ({

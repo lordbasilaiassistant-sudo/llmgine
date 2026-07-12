@@ -43,6 +43,14 @@ export class CognitionDriver {
   private pending = new Map<Entity, PendingEvents>();
   /** In-flight thought promises — awaitable in tests/headless runs. */
   readonly inFlight = new Set<Promise<void>>();
+  /**
+   * Which entities have a thought in flight. Lives HERE, not in component
+   * data: `Mind.thinking` is display state and gets serialized into saves —
+   * gating dispatch on it would leave a mind loaded from a mid-thought save
+   * silently lobotomized forever.
+   */
+  private inFlightMinds = new Set<Entity>();
+  private wired: World | null = null;
 
   constructor(private opts: CognitionOptions) {
     this.budget = opts.budget ?? new InferenceBudget();
@@ -57,6 +65,13 @@ export class CognitionDriver {
   }
 
   private update(world: World, dt: number): void {
+    if (this.wired !== world) {
+      this.wired = world;
+      world.events.on("entity:destroyed", ({ entity }) => {
+        this.pending.delete(entity);
+        this.inFlightMinds.delete(entity);
+      });
+    }
     // 1. route this tick's events to minds that can perceive them
     for (const j of world.events.journal) {
       const line = describeEvent(world, j.type, j.payload);
@@ -75,8 +90,11 @@ export class CognitionDriver {
         // being targeted always wakes
         const authored = j.payload?.entity === e || j.payload?.source === e;
         const targeted = j.payload?.target === e;
-        if (mind.wakeOn.includes(j.type) && !mind.thinking && (targeted || !authored)) {
-          mind.wake = true;
+        if (mind.wakeOn.includes(j.type) && (targeted || !authored)) {
+          // a wake landing mid-thought is queued, not dropped — the mind
+          // reacts as soon as the in-flight thought settles
+          if (this.inFlightMinds.has(e)) mind.wakeQueued = true;
+          else mind.wake = true;
         }
       }
     }
@@ -84,8 +102,11 @@ export class CognitionDriver {
     // 2. tick cadences and dispatch due minds
     for (const [e, mind] of world.each(Mind)) {
       mind.cooldown -= dt;
+      if (this.inFlightMinds.has(e)) continue;
+      // self-heal display flag from stale saves (nothing in flight here)
+      if (mind.thinking) mind.thinking = false;
       const due = mind.cooldown <= 0 || mind.wake;
-      if (!due || mind.thinking) continue;
+      if (!due) continue;
       mind.wake = false;
       mind.cooldown = mind.thinkEvery;
       if (!this.budget.tryAcquire()) {
@@ -93,12 +114,32 @@ export class CognitionDriver {
         continue;
       }
       mind.thinking = true;
+      this.inFlightMinds.add(e);
       const p = this.think(world, e)
-        .catch(() => {})
+        .catch((err) => {
+          // failures BEFORE the provider call (bad perception, missing
+          // components) must still degrade to the deterministic fallback
+          // and surface in telemetry — never a silent no-op mind
+          const m = world.get(e, Mind);
+          this.applyFallback(world, e, m?.fallbackMode ?? "wander");
+          this.opts.onThought?.({
+            entity: e,
+            text: "",
+            toolCalls: [],
+            error: String((err as any)?.message ?? err),
+          });
+        })
         .finally(() => {
           this.budget.release();
+          this.inFlightMinds.delete(e);
           const m = world.get(e, Mind);
-          if (m) m.thinking = false;
+          if (m) {
+            m.thinking = false;
+            if (m.wakeQueued) {
+              m.wakeQueued = false;
+              m.wake = true;
+            }
+          }
           this.inFlight.delete(p);
         });
       this.inFlight.add(p);
@@ -121,11 +162,15 @@ export class CognitionDriver {
   }
 
   private async think(world: World, e: Entity): Promise<void> {
+    const dispatchTick = world.tick;
     const mind = world.require(e, Mind);
     const perception = buildPerception(world, this.opts.grid, e, mind.sightRange);
+    // pending already accumulated this tick's journal lines during routing —
+    // it is the single source of events (merging perception's view of the
+    // same journal would duplicate every line in precious flash-tier context)
     const pend = this.pending.get(e);
     if (pend?.lines.length) {
-      perception.events = [...pend.lines, ...perception.events].slice(-10);
+      perception.events = pend.lines.slice(-10);
       pend.lines = [];
     }
 
@@ -177,6 +222,13 @@ export class CognitionDriver {
 
     try {
       const res = await this.opts.provider.chat({ tier, messages, tools, maxTokens: 300 });
+      this.budget.noteUsage(res.usage?.totalTokens ?? 0);
+      // stale thought: the world rewound (quickload) while this was in
+      // flight — its intents describe a world that no longer exists
+      if (world.tick < dispatchTick) {
+        this.opts.onThought?.({ entity: e, text: "", toolCalls: [], error: "stale thought dropped (world rewound)" });
+        return;
+      }
       const used: string[] = [];
       for (const tc of res.toolCalls) {
         this.opts.actions.submit({ actor: e, verb: tc.name, params: tc.args });

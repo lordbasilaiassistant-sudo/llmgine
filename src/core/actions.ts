@@ -41,6 +41,10 @@ export class ActionRegistry {
   /** Log of accepted actions (for replay/debugging/networking). */
   readonly log: Array<Action & { tick: number }> = [];
   logLimit = 5000;
+  /** Rolling log of ALL attempts incl. rejections + why — the debugging
+   * surface for "why didn't my verb work" (agents live off this). */
+  readonly recent: Array<Action & { tick: number; ok: boolean; error?: string }> = [];
+  recentLimit = 200;
 
   register(def: VerbDef): this {
     this.verbs.set(def.name, def);
@@ -62,20 +66,64 @@ export class ActionRegistry {
 
   /** Validate + resolve immediately (inside a tick, e.g. from input system). */
   execute(world: World, action: Action): ActionResult {
+    const result = this.doExecute(world, action);
+    this.recent.push({ ...action, tick: world.tick, ok: result.ok, error: result.error });
+    if (this.recent.length > this.recentLimit) this.recent.splice(0, this.recent.length - this.recentLimit);
+    return result;
+  }
+
+  private doExecute(world: World, action: Action): ActionResult {
     const def = this.verbs.get(action.verb);
     if (!def) return { ok: false, error: `unknown verb: ${action.verb}` };
-    if (!world.isAlive(action.actor)) return { ok: false, error: "actor is dead" };
-    for (const [key, spec] of Object.entries(def.params)) {
-      if (spec.required && action.params[key] === undefined) {
-        return { ok: false, error: `missing param: ${key}` };
-      }
+    if (!world.isAlive(action.actor) || world.isDoomed(action.actor)) {
+      return { ok: false, error: "actor is dead" };
     }
-    const err = def.validate?.(world, action);
-    if (err) return { ok: false, error: err };
-    def.resolve(world, action);
-    this.log.push({ ...action, tick: world.tick });
+    // Enforce the declared param schema — presence AND type. LLM tool calls
+    // are untrusted input; a string where a number belongs must never reach a
+    // resolver (Number("garbage") = NaN corrupts Transform/spatial state).
+    // Unknown params are stripped so resolvers only ever see declared keys.
+    const params: Record<string, any> = {};
+    for (const [key, spec] of Object.entries(def.params)) {
+      const v = action.params?.[key];
+      if (v === undefined) {
+        if (spec.required) return { ok: false, error: `missing param: ${key}` };
+        continue;
+      }
+      switch (spec.type) {
+        case "number":
+          if (typeof v !== "number" || !Number.isFinite(v)) {
+            return { ok: false, error: `param ${key} must be a finite number` };
+          }
+          break;
+        case "entity":
+          if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+            return { ok: false, error: `param ${key} must be an entity id` };
+          }
+          break;
+        case "string":
+          if (typeof v !== "string") return { ok: false, error: `param ${key} must be a string` };
+          break;
+        case "boolean":
+          if (typeof v !== "boolean") return { ok: false, error: `param ${key} must be a boolean` };
+          break;
+      }
+      params[key] = v;
+    }
+    const clean: Action = { actor: action.actor, verb: action.verb, params };
+    // A throwing validator/resolver must not abort the tick or discard the
+    // rest of a drained batch — contain it and report failure to the caller.
+    try {
+      const err = def.validate?.(world, clean);
+      if (err) return { ok: false, error: err };
+      def.resolve(world, clean);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      world.events.emit("action:error", { ...clean, error: msg });
+      return { ok: false, error: `${action.verb} failed: ${msg}` };
+    }
+    this.log.push({ ...clean, tick: world.tick });
     if (this.log.length > this.logLimit) this.log.splice(0, this.log.length - this.logLimit);
-    world.events.emit("action", { ...action });
+    world.events.emit("action", { ...clean });
     return { ok: true };
   }
 
@@ -88,6 +136,12 @@ export class ActionRegistry {
 
   /** OpenAI-style tool definitions for the verbs an actor may use. */
   toToolSchema(names?: string[]): any[] {
+    if (names) {
+      const missing = names.filter((n) => !this.verbs.has(n));
+      if (missing.length) {
+        console.warn(`toToolSchema: unknown verbs ignored: ${missing.join(", ")}`);
+      }
+    }
     const defs = names ? names.map((n) => this.verbs.get(n)).filter(Boolean) as VerbDef[] : this.list();
     return defs.map((d) => ({
       type: "function",

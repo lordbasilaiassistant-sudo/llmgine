@@ -32,7 +32,10 @@ export const Mind = defineComponent("Mind", () => ({
   cooldown: 0,
   /** Internal: a wake event arrived; think ASAP. */
   wake: false,
-  /** Internal: request in flight — don't double-dispatch. */
+  /** Internal: a wake arrived mid-thought; fires when the thought settles. */
+  wakeQueued: false,
+  /** Display state: a request is in flight (glowing eyes etc). NOT the
+   * dispatch gate — that lives in CognitionDriver so saves can't freeze it. */
   thinking: false,
 }));
 

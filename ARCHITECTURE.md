@@ -51,26 +51,32 @@ resolving that tension:
 ```
 src/
   core/        # zero-dependency deterministic kernel
-    ecs.ts        # World, entities, components, systems, queries
+    ecs.ts        # World, entities, components, systems, queries, save/load snapshots
     loop.ts       # fixed-timestep driver (headless + rAF)
     events.ts     # (in ecs.ts) typed bus + per-tick journal
     prefab.ts     # JSON entity templates — the LLM-generatable unit
     spatial.ts    # spatial hash grid for range queries / perception
     actions.ts    # the intent pipeline (shared by player input AND minds)
+    nav.ts        # NavGrid — coarse blocked-cell grid + deterministic A*
+    save.ts       # SaveStore — named save slots over pluggable storage adapters
   components.ts  # standard components (Transform, Health, Inventory, …)
-  systems/       # movement, collision, combat, loot, quests, spawning, …
+  verbs.ts       # STANDARD_VERBS — say/emote/move_to/follow/attack/flee/stop/pickup
+  systems/       # movement, collision, behavior, combat, projectiles, loot, quests
   ai/            # the LLM layer — depends on core, never vice versa
     provider.ts   # ChatProvider interface + OpenAI-compatible client (GLM default)
-    budget.ts     # rate/cost controls, caching
-    mind.ts       # Mind component + persona/goals/cadence config
+    budget.ts     # request-rate controls, caching (token accounting = roadmap)
+    mind.ts       # Mind + MindMemory components; short-term memory ring buffer
+                  #   (episodic summaries are roadmap — nothing writes episodes yet)
     eyes.ts       # perception: structured snapshot + pixel vision capture
-    memory.ts     # ring buffer + episodic summaries
     cognition.ts  # the scheduler system bridging sim ↔ inference
     voice.ts      # Voice component + TTS/STT service interface
     genesis.ts    # LLM content generation (prefabs, quests, loot, dialogue)
-  render/        # renderer abstraction; canvas2d built-in; 3D = adapter slot
+  render3d/      # three.js renderer — the PRIMARY presentation layer (+ glTF helpers)
+  render/        # Renderer interface + headless (tests/MCP) & canvas-2D (prototyping)
+  input/         # touch virtual joystick + gamepad polling
+  audio/         # procedural SFX/music service + event-journal-driven audio system
   mcp/           # MCP server exposing engine tools to agents
-  cli/           # `new game` scaffolder
+  cli/           # `create` scaffolder + `export` platform wrappers
 examples/        # playable games proving the engine (acceptance tests)
 ```
 
@@ -95,7 +101,9 @@ deterministic and testable.
 - Fixed timestep (default 1/60 s). Render interpolates; sim never varies.
 - Seeded RNG (`mulberry32`) owned by the World. Same seed + same inputs =
   same world. LLM non-determinism only enters through the intent pipeline,
-  which is recorded — a session can be replayed from the intent log.
+  which keeps a capped in-memory log. *(Roadmap — not yet implemented:
+  replaying a session from the intent log; today the log is diagnostic only —
+  it is capped/spliced and not captured by save.)*
 
 ### Events
 - Typed pub/sub plus a **per-tick journal**. The journal is what Eyes read to
@@ -158,8 +166,10 @@ interface ChatProvider {
   A game maps tiers → models once; every Mind just declares its tier.
 
 ### Budgets & caching
-- Global token/request budgets per minute + per-Mind cooldowns. When over
-  budget, minds silently degrade to their deterministic fallback policy.
+- Global request budgets per minute + per-Mind cooldowns. When over budget,
+  minds silently degrade to their deterministic fallback policy. *(Roadmap —
+  not yet implemented: token-level budgets; today only request counts are
+  tracked and returned usage is discarded.)*
 - Response cache keyed on (model, prompt hash) for Genesis-style generation.
 
 ### Mind
@@ -173,15 +183,16 @@ interface ChatProvider {
   droppable.
 
 ### Eyes (perception & vision)
-Three modes, composable per entity:
+Modes, composable per entity (`Mind.perception: "structured" | "pixels" | "both"`):
 1. **Structured** (default, works with any text model): a compact JSON snapshot
    — entities in radius (from the spatial grid), their salient components,
    recent event journal entries within earshot, self state.
-2. **Raycast summary**: line-of-sight filtered version of (1) for genres where
-   "behind a wall" matters (FPS/stealth).
-3. **Pixels**: capture the renderer's view of the entity's viewpoint region and
+2. **Pixels**: capture the renderer's view of the entity's viewpoint region and
    send to the `vision` tier. Browser: canvas crop → data URL. This is real
    sight — the boss looks at the actual screen.
+3. **Raycast summary** *(roadmap — not yet implemented)*: line-of-sight
+   filtered version of (1) for genres where "behind a wall" matters
+   (FPS/stealth). No raycast mode exists in src/ today.
 
 ### Voice
 - `Voice` component (voice id, style) + `VoiceService` engine service with
@@ -209,14 +220,19 @@ spatial model + 3D renderer adapter — roadmap).
 
 ## 6. Distribution surfaces (Phase 5)
 
-1. **Package**: npm, ESM, subpath exports (`.`, `./ai`, `./render`, `./mcp`).
-   Zero runtime deps in `core`.
-2. **CLI**: `create` scaffolder — new game from template (arena, rpg, blank).
-3. **MCP server**: the engine as an agent tool. Tools: `create_game`,
-   `define_prefab`, `spawn`, `attach_mind`, `run_sim` (headless N ticks →
-   event/state report), `query_world`, `generate_content`. An agent can build,
-   simulate, and inspect a game without a browser. Ships last but the headless
-   loop + JSON prefabs + action registry are designed for it from day one.
+1. **Package**: npm (not yet published), ESM, subpath exports (`.`, `./ai`,
+   `./render`, `./render3d`, `./input`, `./audio`, `./mcp`). Zero runtime deps
+   in `core`.
+2. **CLI**: `create` scaffolder (links the scaffold to the engine clone it ran
+   from via a `file:` dependency until the package is published) + `export`
+   platform wrappers (§6.5).
+3. **MCP server**: the engine as an agent tool (`.mcp.json` at the repo root
+   auto-connects Claude Code; see [docs/mcp.md](./docs/mcp.md)). Tools:
+   `create_world`, `define_prefab`, `define_loot_table`, `list_prefabs`,
+   `spawn`, `attach_mind`, `act`, `run` (headless N ticks → event/state
+   report), `query_world`, `save_world`, `load_world`, `destroy_world`,
+   `generate_prefab` (Genesis). An agent can build, simulate, and inspect a
+   game without a browser.
 
 ## 6.5 Export pipeline (any game → any platform)
 

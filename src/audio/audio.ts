@@ -41,6 +41,13 @@ export class WebAudioService implements AudioService {
   private samples = new Map<string, AudioBuffer>();
   private synths = new Map<string, Synth>();
   private musicNodes: { stop: () => void } | null = null;
+  /**
+   * Sounds requested before the context is running (autoplay policy) are
+   * queued and flushed the moment resume() lands — the unlocking gesture's
+   * own sounds are not dropped. Bounded; oldest entries fall off.
+   */
+  private pending: Array<{ kind: "sfx" | "music"; run: () => void }> = [];
+  private static readonly MAX_PENDING = 16;
   /** Distance at which a positioned sound falls silent. */
   falloff = 600;
   masterVolume = 0.6;
@@ -51,8 +58,24 @@ export class WebAudioService implements AudioService {
 
   /** Must be called from a user gesture once (browser autoplay policy). */
   unlock(): void {
-    if (!this.ctx && typeof AudioContext !== "undefined") this.ctx = new AudioContext();
-    this.ctx?.resume();
+    if (!this.ctx && typeof AudioContext !== "undefined") {
+      this.ctx = new AudioContext();
+      // also flush on OS/tab-level resumes, not just our own resume() call
+      this.ctx.addEventListener?.("statechange", () => this.flush());
+    }
+    void this.ctx?.resume().then(() => this.flush()).catch(() => {});
+  }
+
+  private enqueue(kind: "sfx" | "music", run: () => void): void {
+    this.pending.push({ kind, run });
+    if (this.pending.length > WebAudioService.MAX_PENDING) this.pending.shift();
+  }
+
+  private flush(): void {
+    if (!this.ctx || this.ctx.state !== "running") return;
+    const q = this.pending;
+    this.pending = [];
+    for (const p of q) p.run();
   }
 
   defineSynth(name: string, synth: Synth): this {
@@ -72,7 +95,10 @@ export class WebAudioService implements AudioService {
   }
 
   play(sound: string, opts: PlayOptions = {}): void {
-    if (!this.ctx || this.ctx.state !== "running") return;
+    if (!this.ctx || this.ctx.state !== "running") {
+      this.enqueue("sfx", () => this.play(sound, opts));
+      return;
+    }
     let gain = (opts.volume ?? 1) * this.masterVolume;
     let pan = 0;
     if (opts.x !== undefined && opts.y !== undefined) {
@@ -106,7 +132,12 @@ export class WebAudioService implements AudioService {
    * generated once into a buffer and looped (zero assets).
    */
   music(track = "ambient", volume = 0.25): void {
-    if (!this.ctx || this.ctx.state !== "running") return;
+    if (!this.ctx || this.ctx.state !== "running") {
+      // only the latest requested track matters once unlocked
+      this.pending = this.pending.filter((p) => p.kind !== "music");
+      this.enqueue("music", () => this.music(track, volume));
+      return;
+    }
     this.stopMusic();
     const ctx = this.ctx;
     const g = ctx.createGain();
@@ -120,13 +151,19 @@ export class WebAudioService implements AudioService {
     src.start();
     this.musicNodes = {
       stop: () => {
-        g.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
+        // anchor the ramp at the current value first — without setValueAtTime
+        // the "fade" is an instant cut (classic WebAudio pitfall)
+        const now = ctx.currentTime;
+        g.gain.cancelScheduledValues(now);
+        g.gain.setValueAtTime(g.gain.value, now);
+        g.gain.linearRampToValueAtTime(0, now + 0.6);
         setTimeout(() => src.stop(), 700);
       },
     };
   }
 
   stopMusic(): void {
+    this.pending = this.pending.filter((p) => p.kind !== "music");
     this.musicNodes?.stop();
     this.musicNodes = null;
   }
@@ -137,6 +174,14 @@ function renderAmbientLoop(ctx: AudioContext): AudioBuffer {
   const sr = ctx.sampleRate;
   const beat = 60 / 68; // 68 bpm
   const len = Math.floor(sr * beat * 16);
+  const dur = len / sr; // exact loop duration in seconds
+  // Quantize every continuous component to a whole number of cycles per loop,
+  // otherwise the loop point lands mid-phase and clicks audibly every ~14 s.
+  // (Pings decay within their own beat, so they don't need alignment.)
+  const q = (f: number) => Math.max(1, Math.round(f * dur)) / dur;
+  const drone1 = q(73.42);
+  const drone2 = q(146.83 * 1.003);
+  const lfo = q(0.11);
   const buf = ctx.createBuffer(2, len, sr);
   const notes = [146.83, 174.61, 220, 293.66, 349.23]; // D F A d f
   for (let ch = 0; ch < 2; ch++) {
@@ -145,8 +190,8 @@ function renderAmbientLoop(ctx: AudioContext): AudioBuffer {
       const t = i / sr;
       // drone: two slow detuned sines an octave apart
       let v =
-        0.16 * Math.sin(2 * Math.PI * 73.42 * t + ch) * (0.8 + 0.2 * Math.sin(2 * Math.PI * 0.11 * t)) +
-        0.1 * Math.sin(2 * Math.PI * 146.83 * t * 1.003);
+        0.16 * Math.sin(2 * Math.PI * drone1 * t + ch) * (0.8 + 0.2 * Math.sin(2 * Math.PI * lfo * t)) +
+        0.1 * Math.sin(2 * Math.PI * drone2 * t);
       // sparse pings on a deterministic pattern
       const step = Math.floor(t / beat);
       const local = t - step * beat;
