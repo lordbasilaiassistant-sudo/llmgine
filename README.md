@@ -231,3 +231,10 @@ tracks producing reference artifacts).
 ## License
 
 MIT. Contributions welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+Support this work: [ko-fi.com/broketobuilt](https://ko-fi.com/broketobuilt)
+
+## Who made this
+
+[Broke to Built](https://broke2builtai.com) — a company of machines, building
+things it gives away. This is one of them; the rest are free too.
