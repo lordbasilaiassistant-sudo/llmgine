@@ -68,4 +68,15 @@ describe("render interpolation", () => {
     expect(xf.at(1, 0.5)).toBeUndefined();
     expect(xf.at(2, 0.5)).toBeDefined();
   });
+
+  it("settles when a new tick lands at the same position (entity stopped)", () => {
+    const xf = new TransformLerp();
+    xf.sample(1, 0, 0, 0, 0, 1);
+    xf.sample(1, 10, 0, 0, 0, 2);
+    xf.sample(1, 10, 0, 0, 0, 3); // stopped — new tick, same values
+    expect(xf.at(1, 0)!.x).toBe(10);
+    expect(xf.at(1, 0.5)!.x).toBe(10);
+    xf.sample(1, 10, 0, 0, 0, 3); // second draw, same tick — still settled
+    expect(xf.at(1, 0.5)!.x).toBe(10);
+  });
 });

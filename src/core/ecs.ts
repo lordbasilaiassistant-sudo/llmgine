@@ -29,7 +29,9 @@ export function defineComponent<T extends object>(
       if (init) {
         for (const k of Object.keys(data) as (keyof T)[]) {
           const v = (init as any)[k as string];
-          if (v !== undefined) (data as any)[k as string] = v;
+          // deep-clone nested values so two spawns (or a spawn and the
+          // prefab registry) never share Inventory.items / Faction.hostileTo
+          if (v !== undefined) (data as any)[k as string] = structuredClone(v);
         }
       }
       return data;
@@ -111,9 +113,37 @@ export class EventBus {
   emit(type: string, payload: any = {}): void {
     if (this.inTick) this.journal.push({ type, payload, tick: this.tick });
     else this.offTick.push({ type, payload });
+    this.notify(type, payload);
+  }
+
+  /** Fire listeners without journaling (engine bookkeeping: world:loaded). */
+  notify(type: string, payload: any = {}): void {
     const set = this.listeners.get(type);
     if (set) for (const fn of set) fn(payload);
   }
+
+  /** Plain-data snapshot of journal state so World.save() can restore
+   * reactions scheduled for the next tick (aggro on lastJournal, etc.). */
+  capture(): EventBusSnapshot {
+    return {
+      journal: structuredClone(this.journal),
+      lastJournal: structuredClone(this.lastJournal),
+      offTick: structuredClone(this.offTick),
+    };
+  }
+
+  restore(snap: EventBusSnapshot | undefined): void {
+    this.journal = snap?.journal ? structuredClone(snap.journal) : [];
+    this.lastJournal = snap?.lastJournal ? structuredClone(snap.lastJournal) : [];
+    this.offTick = snap?.offTick ? structuredClone(snap.offTick) : [];
+    this.inTick = false;
+  }
+}
+
+export interface EventBusSnapshot {
+  journal: Array<{ type: string; payload: any; tick: number }>;
+  lastJournal: Array<{ type: string; payload: any; tick: number }>;
+  offTick: Array<{ type: string; payload: any }>;
 }
 
 /** Deterministic seeded RNG (mulberry32) — same seed, same world. */
@@ -330,6 +360,7 @@ export class World {
       time: this.time,
       rng: this.rng.getState(),
       components,
+      events: this.events.capture(),
     };
   }
 
@@ -350,6 +381,7 @@ export class World {
     this.stores.clear();
     this.pendingDestroy.clear();
     this.events.reset();
+    this.events.restore(snap.events);
     const dropped: string[] = [];
     for (const [name, rows] of Object.entries(snap.components)) {
       const type = byName.get(name);
@@ -366,6 +398,10 @@ export class World {
         `World.load: dropped unregistered component types: ${dropped.join(", ")} — pass them in the types list to restore them`,
       );
     }
+    // spatial indices (SpatialGrid) live outside the snapshot — listeners
+    // (movementSystem) clear/rebuild on this. Off-tick so it lands in the
+    // restored offTick AND fires listeners immediately.
+    this.events.notify("world:loaded", {});
     return { dropped };
   }
 }
@@ -377,4 +413,6 @@ export interface WorldSnapshot {
   time: number;
   rng: number;
   components: Record<string, Array<[Entity, any]>>;
+  /** Journal state at save time. Optional for snapshots written before this field existed. */
+  events?: EventBusSnapshot;
 }

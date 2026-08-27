@@ -69,7 +69,8 @@ export const followVerb: VerbDef = {
     const base = requireMobile(w, a);
     if (base) return base;
     if (Number(a.params.target) === a.actor) return "you cannot follow yourself";
-    return w.isAlive(Number(a.params.target)) ? null : "no such entity";
+    const target = Number(a.params.target);
+    return w.isAlive(target) && !w.isDoomed(target) ? null : "no such entity";
   },
   resolve: (w, a) => {
     const b = w.require(a.actor, Behavior);

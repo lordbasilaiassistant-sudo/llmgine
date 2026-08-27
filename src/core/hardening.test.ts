@@ -478,6 +478,28 @@ describe("combat feel — telegraphs, knockback, landing recovery", () => {
     expect(world.require(victim, Health).hp).toBe(50); // dodge succeeded
   });
 
+  it("instant melee (windup 0) against an airborne target emits combat:whiff", () => {
+    const world = new World(1);
+    world.addSystem(combatSystem());
+    const goblin = world.create();
+    world.add(goblin, Transform, { x: 0, y: 0 });
+    world.add(goblin, Attack, { damage: 5, range: 40, cooldown: 1, windup: 0 });
+    world.add(goblin, Behavior, { mode: "attack", target: 0 });
+    const victim = world.create();
+    world.add(victim, Transform, { x: 20, y: 0, z: 30 });
+    world.add(victim, Health, { hp: 50, maxHp: 50 });
+    world.require(goblin, Behavior).target = victim;
+    let whiffed = false;
+    let swung = false;
+    world.events.on("combat:whiff", () => (whiffed = true));
+    world.events.on("combat:swing", () => (swung = true));
+    world.step(1 / 60);
+    expect(whiffed).toBe(true);
+    expect(swung).toBe(false);
+    expect(world.require(victim, Health).hp).toBe(50);
+    expect(world.require(goblin, Attack).ready).toBeGreaterThan(0); // cycle still consumed
+  });
+
   it("hits shove the victim through the knockback channel", () => {
     const world = new World(1);
     const grid = new SpatialGrid();

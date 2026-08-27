@@ -127,4 +127,19 @@ describe("replay — a session is seed + intent log", () => {
     }, TYPES, final);
     expect(ok).toBe(true);
   });
+
+  it("recordings survive the action-log cap without dropping early intents", () => {
+    const { world, actions } = buildSim();
+    const { player } = spawnCast(world);
+    actions.logLimit = 20;
+    const rec = startRecording(world, actions);
+    for (let i = 0; i < 50; i++) {
+      actions.execute(world, { actor: player, verb: "say", params: { text: `line ${i}` } });
+    }
+    const session = rec.stop();
+    expect(session.log.length).toBe(50);
+    expect(session.log[0].params.text).toBe("line 0");
+    expect(session.log[49].params.text).toBe("line 49");
+    expect(session.timestep).toBeCloseTo(1 / 60);
+  });
 });

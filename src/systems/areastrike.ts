@@ -2,7 +2,7 @@ import { defineComponent } from "../core/ecs.js";
 import type { System } from "../core/ecs.js";
 import type { VerbDef } from "../core/actions.js";
 import type { SpatialGrid } from "../core/spatial.js";
-import { DODGE_HEIGHT, Faction, Health, Transform } from "../components.js";
+import { DODGE_HEIGHT, Faction, Health, Transform, Velocity } from "../components.js";
 import { dealDamage } from "./combat.js";
 
 /**
@@ -106,7 +106,26 @@ export function areaStrikeSystem(grid: SpatialGrid): System {
           if ((ot.z ?? 0) > DODGE_HEIGHT) continue; // jumped the shockwave
           if (z.faction && world.get(other, Faction)?.id === z.faction) continue;
           if (Math.hypot(ot.x - t.x, ot.y - t.y) > z.radius) continue;
-          dealDamage(world, z.source, other, z.damage, z.knockback);
+          // knockback radiates from the ZONE, not the caster — a blast
+          // whose caster died mid-fuse still shoves, and standing at the
+          // caster's current position isn't "ground zero"
+          dealDamage(world, z.source, other, z.damage, 0);
+          if (z.knockback > 0) {
+            const v = world.get(other, Velocity);
+            if (v) {
+              let dx = ot.x - t.x;
+              let dy = ot.y - t.y;
+              let d = Math.hypot(dx, dy);
+              if (d < 1e-6) {
+                // exact center: deterministic split by entity id (same as collision)
+                dx = other < e ? 1 : -1;
+                dy = 0;
+                d = 1;
+              }
+              v.kx = (v.kx ?? 0) + (dx / d) * z.knockback;
+              v.ky = (v.ky ?? 0) + (dy / d) * z.knockback;
+            }
+          }
         }
         world.events.emit("area:hit", { x: t.x, y: t.y, radius: z.radius, source: z.source });
         world.destroy(e);

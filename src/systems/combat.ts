@@ -129,6 +129,10 @@ export function combatSystem(): System {
             // windup 0 = instant (player-controlled attackers stay snappy)
             world.events.emit("combat:swing", { entity: e, target: b.target });
             dealDamage(world, e, b.target, atk.damage * statOf(world, e, "damage"), atk.knockback);
+          } else {
+            // instant path vs airborne: still consume the cycle (dodge
+            // economics) but announce the whiff so audio/render/minds hear it
+            world.events.emit("combat:whiff", { entity: e, target: b.target });
           }
         }
       }

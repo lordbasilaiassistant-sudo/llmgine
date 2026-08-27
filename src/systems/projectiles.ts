@@ -186,13 +186,11 @@ export function projectileSystem(grid: SpatialGrid, nav?: import("../core/nav.js
         if (c.radius > maxR) maxR = c.radius;
       }
       for (const [e, p] of world.each(Projectile)) {
-        p.ttl -= dt;
-        if (p.ttl <= 0) {
-          world.destroy(e);
+        const t = world.get(e, Transform);
+        if (!t) {
+          if ((p.ttl -= dt) <= 0) world.destroy(e);
           continue;
         }
-        const t = world.get(e, Transform);
-        if (!t) continue;
         const v = world.get(e, Velocity);
         // movement already integrated this tick — sweep from where it was
         const px = t.x - (v?.vx ?? 0) * dt;
@@ -222,6 +220,8 @@ export function projectileSystem(grid: SpatialGrid, nav?: import("../core/nav.js
         }
         if (hit) {
           dealDamage(world, p.source, hit, p.damage, p.knockback);
+          world.destroy(e);
+        } else if ((p.ttl -= dt) <= 0) {
           world.destroy(e);
         }
       }

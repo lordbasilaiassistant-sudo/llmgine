@@ -148,7 +148,10 @@ export function buildColosseum(r: ThreeRenderer, R: number): (time: number) => v
   scene.add(embers);
 
   // per-frame environment animation
+  let lastT = 0;
   return (time: number) => {
+    const dt = lastT ? Math.min(Math.max(time - lastT, 0), 0.1) : 1 / 60;
+    lastT = time;
     for (let i = 0; i < torches.length; i++) {
       const fl = 0.78 + Math.sin(time * 9 + i * 2.4) * 0.16 + Math.sin(time * 23 + i) * 0.06;
       torches[i].intensity = 26000 * fl;
@@ -156,10 +159,10 @@ export function buildColosseum(r: ThreeRenderer, R: number): (time: number) => v
     }
     (sigil.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.55 + Math.sin(time * 2.2) * 0.25;
     for (let i = 0; i < emberN; i++) {
-      let y = emberPos[i * 3 + 1] + (10 + emberSeed[i] * 16) * 0.016;
+      let y = emberPos[i * 3 + 1] + (10 + emberSeed[i] * 16) * dt;
       if (y > 110) y = 0;
       emberPos[i * 3 + 1] = y;
-      emberPos[i * 3] += Math.sin(time * 1.5 + i) * 0.08;
+      emberPos[i * 3] += Math.sin(time * 1.5 + i) * 4.8 * dt;
     }
     emberGeo.attributes.position.needsUpdate = true;
     for (let i = 0; i < crowdN; i++) {

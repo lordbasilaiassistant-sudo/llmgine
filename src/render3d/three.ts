@@ -264,13 +264,20 @@ export class ThreeRenderer implements Renderer {
           ? factory({ entity: e, world, sprite: s })
           : this.defaultModel(s);
         obj.traverse((o) => {
-          if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+          if (!(o as THREE.Mesh).isMesh) return;
+          const mat = (o as THREE.Mesh).material;
+          const mats = Array.isArray(mat) ? mat : [mat];
+          // additive glow discs/halos must not cast real shadows — the
+          // depth pass ignores blending, so they'd stamp dark blobs under
+          // the exact things meant to look emissive
+          if (mats.some((m) => m && (m as THREE.Material).blending === THREE.AdditiveBlending)) return;
+          o.castShadow = true;
         });
         this.scene.add(obj);
         rec = { obj, kind: s.kind };
         this.objects.set(e, rec);
       }
-      this.xf.sample(e, t.x, t.y, t.rot, (t as any).z ?? 0);
+      this.xf.sample(e, t.x, t.y, t.rot, (t as any).z ?? 0, world.tick);
       const ip = this.xf.at(e, alpha) ?? { ...t, z: (t as any).z ?? 0 };
       rec.obj.position.set(ip.x, ip.z, ip.y); // Transform.z = height (jump arcs)
       // sim rot (radians, 0 = +x, toward +y) → Y rotation on the ground plane
