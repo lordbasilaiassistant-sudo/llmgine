@@ -104,6 +104,44 @@ describe("cognition", () => {
     expect(provider.calls).toHaveLength(2);
   });
 
+  it("Mind.verbs is a hard allowlist — off-list tool calls are dropped, not submitted", async () => {
+    const provider = new MockProvider([
+      { text: "I strike!", toolCalls: [{ id: "1", name: "move_to", args: { x: 50, y: 0 } }] },
+    ]);
+    const { world, driver, npc } = setup(provider);
+    world.require(npc, Mind).verbs = ["say"];
+    world.step(dt);
+    await driver.settle();
+    world.step(dt);
+    // move_to is a REGISTERED verb this body supports — permission, not
+    // capability, must stop it
+    expect(world.require(npc, Behavior).mode).toBe("idle");
+    // say is allowed, so the plain-text fallback still speaks
+    expect(world.require(npc, Speech).text).toBe("I strike!");
+  });
+
+  it("the plain-text→say fallback respects the allowlist too", async () => {
+    const provider = new MockProvider([{ text: "must never be spoken" }]);
+    const { world, driver, npc } = setup(provider);
+    world.require(npc, Mind).verbs = ["move_to"];
+    world.step(dt);
+    await driver.settle();
+    world.step(dt);
+    expect(world.require(npc, Speech).text).toBe("");
+  });
+
+  it("position-only events (loot:dropped) reach nearby minds", async () => {
+    const provider = new MockProvider([{ text: "" }]);
+    const { world, driver } = setup(provider);
+    // loot:dropped carries only {from, items, x, y} — no living source entity
+    world.events.emit("loot:dropped", { x: 40, y: 0, items: [{ name: "Gold" }] });
+    world.step(dt);
+    await driver.settle();
+    expect(provider.calls).toHaveLength(1);
+    const userMsg = provider.calls[0].messages[1].content as string;
+    expect(userMsg).toContain("loot dropped: Gold");
+  });
+
   it("speech from entities with Voice reaches the voice service", async () => {
     const provider = new MockProvider([{ text: "hello traveler" }]);
     const { world, driver, npc } = setup(provider);

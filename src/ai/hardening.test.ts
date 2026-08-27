@@ -61,6 +61,50 @@ describe("cognition robustness (#22)", () => {
     expect(world.require(e, Behavior).mode).toBe("wander");
   });
 
+  it("disembodied minds never see (undefined,undefined) in their prompt", async () => {
+    const provider = new MockProvider([{ text: "" }]);
+    const { world, driver } = setup(provider);
+    const e = world.create(); // no Transform — a faction/weather mind
+    world.add(e, Speech, {});
+    world.add(e, Mind, { thinkEvery: 0.03 });
+    new GameLoop(world).advance(5);
+    await driver.settle();
+    const userMsg = provider.calls[0].messages[1].content as string;
+    expect(userMsg).not.toContain("undefined");
+  });
+
+  it("thoughts straddling a rewind are dropped even after the sim re-advances (load epoch)", async () => {
+    let release: (v: any) => void = () => {};
+    const gate = new Promise((r) => (release = r));
+    let call = 0;
+    const provider = {
+      supportsVision: false,
+      async chat() {
+        if (call++ > 0) return { text: "", toolCalls: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, model: "mock" };
+        await gate;
+        return {
+          text: "",
+          toolCalls: [{ id: "1", name: "move_to", args: { x: 99, y: 99 } }],
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          model: "mock",
+        };
+      },
+    };
+    const { world, driver } = setup(provider as any);
+    const e = mkMind(world);
+    const snap = world.save();
+    new GameLoop(world).advance(5); // dispatches the thought
+    world.load(snap, [...ALL_COMPONENTS, Mind, MindMemory]); // rewind to tick 0
+    // the sim re-advances PAST the dispatch tick before the thought settles —
+    // a bare tick comparison would wrongly accept the stale intents (and
+    // World.load rewound nextEntity, so perceived ids may be rebound)
+    new GameLoop(world).advance(10);
+    release(null);
+    await driver.settle();
+    new GameLoop(world).advance(2); // drain queue
+    expect(world.require(e, Behavior).mode).toBe("idle"); // stale move_to never applied
+  });
+
   it("stale thoughts are dropped after a world rewind (quickload)", async () => {
     let release: (v: any) => void = () => {};
     const gate = new Promise((r) => (release = r));

@@ -41,6 +41,9 @@ interface Session {
   loot: LootTables;
   driver: CognitionDriver | null;
   events: Array<{ type: string; payload: any; tick: number }>;
+  /** Monotonic count of ALL events ever pushed — the ring cap shifts old
+   * entries out, so `events.length` is useless as a window marker. */
+  totalEvents: number;
 }
 
 const AI_COMPONENTS = [Mind, MindMemory, QuestLog];
@@ -83,13 +86,15 @@ export function buildServer(): McpServer {
     if (driver) world.addSystem(driver.system());
 
     const events: Session["events"] = [];
+    const session: Session = { world, loop: new GameLoop(world), actions, prefabs, loot, driver, events, totalEvents: 0 };
     for (const type of ["speech", "combat:damaged", "combat:death", "loot:dropped", "quest:completed", "item:pickup", "entity:spawned"]) {
       world.events.on(type, (payload) => {
         events.push({ type, payload: JSON.parse(JSON.stringify(payload ?? {})), tick: world.tick });
+        session.totalEvents++;
         if (events.length > 500) events.shift();
       });
     }
-    sessions.set(id, { world, loop: new GameLoop(world), actions, prefabs, loot, driver, events });
+    sessions.set(id, session);
     return id;
   }
 
@@ -232,7 +237,7 @@ export function buildServer(): McpServer {
     { worldId: z.string(), ticks: z.number().int().min(1).max(36000).default(600) },
     async ({ worldId, ticks }) => {
       const s = getSession(worldId);
-      const from = s.events.length;
+      const fromTotal = s.totalEvents;
       // advance in slices so in-flight thoughts land mid-run, like a real game
       let remaining = ticks;
       while (remaining > 0) {
@@ -241,11 +246,19 @@ export function buildServer(): McpServer {
         remaining -= slice;
         if (s.driver) await s.driver.settle();
       }
+      // thoughts completing in the FINAL settle only queued their intents —
+      // one extra tick drains them so their actions land in THIS window,
+      // not mysteriously at the start of the next run call
+      if (s.driver) s.loop.advance(1);
+      const fresh = Math.min(s.totalEvents - fromTotal, s.events.length);
       return text({
         tick: s.world.tick,
         time: `${Math.round(s.world.time * 10) / 10}s`,
         entities: s.world.entityCount(),
-        events: s.events.slice(from),
+        events: fresh > 0 ? s.events.slice(-fresh) : [],
+        ...(s.totalEvents - fromTotal > s.events.length
+          ? { note: `${s.totalEvents - fromTotal - s.events.length} earliest events of this window were evicted by the 500-event cap` }
+          : {}),
       });
     },
   );
@@ -282,8 +295,19 @@ export function buildServer(): McpServer {
       } catch {
         throw new Error("snapshot is not valid JSON — pass the exact string save_world returned");
       }
-      if (!snap || typeof snap !== "object" || !Array.isArray(snap.alive) || typeof snap.components !== "object") {
-        throw new Error("snapshot shape is wrong — expected the object produced by save_world (alive[], components{}, rng, tick)");
+      // validate the FULL WorldSnapshot shape — a truncated/hand-edited snapshot
+      // missing nextEntity would silently corrupt the world (create() returns NaN)
+      const bad =
+        !snap || typeof snap !== "object" ? "not an object"
+        : !Number.isInteger(snap.nextEntity) || snap.nextEntity < 1 ? "nextEntity must be a positive integer"
+        : !Array.isArray(snap.alive) || snap.alive.some((e: any) => !Number.isInteger(e)) ? "alive must be an array of entity ids"
+        : !Number.isInteger(snap.tick) || snap.tick < 0 ? "tick must be a non-negative integer"
+        : typeof snap.time !== "number" || !Number.isFinite(snap.time) ? "time must be a finite number"
+        : typeof snap.rng !== "number" || !Number.isFinite(snap.rng) ? "rng must be a number"
+        : !snap.components || typeof snap.components !== "object" || Array.isArray(snap.components) ? "components must be an object"
+        : null;
+      if (bad) {
+        throw new Error(`snapshot shape is wrong (${bad}) — pass the exact object produced by save_world`);
       }
       s.world.load(snap, s.prefabs.componentTypes());
       return text({ ok: true, tick: s.world.tick, entities: s.world.entityCount() });

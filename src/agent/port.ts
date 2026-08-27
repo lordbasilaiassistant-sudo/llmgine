@@ -34,6 +34,8 @@ export interface AgentPortOptions {
 
 export class AgentPort {
   private ring: Array<{ type: string; payload: any; tick: number }> = [];
+  private capturedTick = -1;
+  private capturedCount = 0;
   avatar: Entity;
 
   constructor(private opts: AgentPortOptions) {
@@ -45,8 +47,19 @@ export class AgentPort {
     return {
       name: "agent-port",
       order: 999,
-      update: ({ world }) => {
+      update: ({ world, tick }) => {
+        // Journal entries can land AFTER this system runs: World.step flushes
+        // deferred destroys (emitting entity:destroyed) after all systems.
+        // Capture the tail of the previous tick's complete journal first —
+        // otherwise deaths/destroys never reach events(), which is exactly
+        // what a testing agent asserts on.
+        const last = world.events.lastJournal;
+        if (last.length && last[0].tick === this.capturedTick) {
+          for (let i = this.capturedCount; i < last.length; i++) this.ring.push(last[i]);
+        }
         for (const j of world.events.journal) this.ring.push(j);
+        this.capturedTick = tick;
+        this.capturedCount = world.events.journal.length;
         const limit = this.opts.eventLimit ?? 400;
         if (this.ring.length > limit) this.ring.splice(0, this.ring.length - limit);
       },
@@ -150,7 +163,11 @@ export function connectAgentBridge(port: AgentPort, base = ""): void {
     let error: string | undefined;
     try {
       const fn = (port as any)[msg.method];
-      if (typeof fn !== "function") throw new Error(`unknown method: ${msg.method}`);
+      // reject Object.prototype members (hasOwnProperty etc.) — only real
+      // port methods and game-added extensions are callable over the bridge
+      if (typeof fn !== "function" || fn === (Object.prototype as any)[msg.method]) {
+        throw new Error(`unknown method: ${msg.method}`);
+      }
       result = await fn.apply(port, Array.isArray(msg.args) ? msg.args : []);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);

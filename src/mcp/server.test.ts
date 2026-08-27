@@ -117,6 +117,46 @@ describe("llmgine MCP server", () => {
 
     const bad = await call("load_world", { worldId, snapshot: "not json" });
     expect(bad.isError).toBe(true);
+
+    // a "shaped" but truncated snapshot must be rejected too — nextEntity:
+    // undefined would make every future create() return NaN
+    const truncated = { ...JSON.parse(snapshot) };
+    delete truncated.nextEntity;
+    const bad2 = await call("load_world", { worldId, snapshot: JSON.stringify(truncated) });
+    expect(bad2.isError).toBe(true);
+    expect((bad2.content as any)[0].text).toContain("nextEntity");
+  });
+
+  it("run's event window survives the 500-event ring cap", async () => {
+    const { worldId } = parse(await call("create_world", { seed: 5 }));
+    parse(await call("define_prefab", {
+      worldId,
+      prefab: { name: "crier", components: { Transform: {}, Speech: {} } },
+    }));
+    const { entity } = parse(await call("spawn", { worldId, prefab: "crier" }));
+    // pin the ring at its cap: every push now pairs with a shift, so
+    // events.length stays constant — a length-based window sees nothing
+    for (let i = 0; i < 505; i++) {
+      await call("act", { worldId, actor: entity, verb: "say", params: { text: `cry ${i}` } });
+    }
+    // two hostiles generate combat events DURING the run window
+    const brawler = (id: string, foe: string, x: number) => ({
+      name: `brawler-${id}`,
+      components: {
+        Transform: { x, y: 0 },
+        Velocity: { maxSpeed: 100 },
+        Health: { hp: 500, maxHp: 500 },
+        Attack: { damage: 5, range: 60, cooldown: 0.5 },
+        Behavior: { mode: "idle", sightRange: 300 },
+        Faction: { id, hostileTo: [foe] },
+      },
+    });
+    parse(await call("define_prefab", { worldId, prefab: brawler("red", "blue", -20) }));
+    parse(await call("define_prefab", { worldId, prefab: brawler("blue", "red", 20) }));
+    parse(await call("spawn", { worldId, prefab: "brawler-red" }));
+    parse(await call("spawn", { worldId, prefab: "brawler-blue" }));
+    const res = parse(await call("run", { worldId, ticks: 600 }));
+    expect(res.events.some((e: any) => e.type === "combat:damaged")).toBe(true);
   });
 
   it("destroy_world frees the session and later calls fail with known worlds listed", async () => {

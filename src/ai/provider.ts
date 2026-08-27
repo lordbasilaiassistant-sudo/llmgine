@@ -205,14 +205,18 @@ export function repairToolCall(
   const keys = [...rawName.matchAll(/<arg_key>([^<]*)<\/arg_key>/g)].map((m) => m[1].trim());
   const vals = [...rawName.matchAll(/<arg_value>([\s\S]*?)<\/arg_value>/g)].map((m) => m[1].trim());
   const out = { ...args };
+  const tool = tools?.find((t) => t?.function?.name === name);
+  // coercion is SCHEMA-directed: "42" stays a string for a string param
+  // (say text: 42 would be rejected by the action gate as a type error)
+  const typeOf = (k: string): string | undefined =>
+    tool?.function?.parameters?.properties?.[k]?.type;
   if (keys.length && keys.length === vals.length) {
-    keys.forEach((k, i) => (out[k] = coerce(vals[i])));
+    keys.forEach((k, i) => (out[k] = coerce(vals[i], typeOf(k))));
   } else if (vals.length === 1) {
-    const tool = tools?.find((t) => t?.function?.name === name);
     const param: string | undefined =
       tool?.function?.parameters?.required?.[0] ??
       Object.keys(tool?.function?.parameters?.properties ?? {})[0];
-    if (param) out[param] = coerce(vals[0]);
+    if (param) out[param] = coerce(vals[0], typeOf(param));
   }
   return { name, args: out };
 }
@@ -225,7 +229,16 @@ function warnOnce(msg: string): void {
   }
 }
 
-function coerce(v: string): string | number | boolean {
+function coerce(v: string, declaredType?: string): string | number | boolean {
+  if (declaredType === "string") return v;
+  if (declaredType === "number") {
+    const n = Number(v);
+    return v !== "" && !isNaN(n) ? n : v;
+  }
+  if (declaredType === "boolean") {
+    return v === "true" ? true : v === "false" ? false : v;
+  }
+  // unknown param/type: best-effort legacy coercion
   if (v === "true") return true;
   if (v === "false") return false;
   return v !== "" && !isNaN(Number(v)) ? Number(v) : v;
