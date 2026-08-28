@@ -218,12 +218,21 @@ and builds against the clone via a `file:` link — proven end-to-end
 Electron/.exe config, Capacitor mobile config, installable PWA, and a store
 listing kit (assets checklist, pricing worksheet, AI disclosure) — generator
 output is covered by CLI subprocess tests. The heavy toolchains run in *your*
-game project ([#1](https://github.com/lordbasilaiassistant-sudo/llmgine/issues/1)
-tracks producing reference artifacts).
+game project.
 
-**Remaining gaps (tracked as issues):**
-- Human feel-tests: audio ear-test (#2), phone/pad in hand (#3), a real .glb
-  exercised in an example (#6).
+**Built and tested, but never confirmed by a human sense.** Generator output
+passing a subprocess test is not the same as the thing being *good*, and we will
+not claim these until someone checks:
+- **Audio** — an ear-test. Procedural SFX and ambient music are generated and
+  unit-tested; nobody has listened and said it sounds right.
+- **Touch and gamepad** — a phone and a pad actually in hand. The joystick and
+  pad mapping are tested in code, not in thumbs.
+- **glTF** — a real `.glb` exercised in an example. The helpers load; no
+  substantial model has been through them.
+- **Export** — reference artifacts. The generators emit correct configs; nobody
+  has taken one all the way to an installed `.exe` or a signed `.apk`.
+
+**Genuinely not built:**
 - Multiplayer (the event journal + intent log are the designed foundation).
 - Voxel/heightmap terrain; STT input.
 - Vision ("pixels" Eyes) is wired end-to-end but not yet exercised by the demo.
