@@ -37,6 +37,9 @@ describe("llmgine CLI", () => {
     execFileSync("node", [CLI, "export", "store"], { cwd: dir });
     expect(existsSync(join(dir, "export/windows/electron-builder.yml"))).toBe(true);
     expect(existsSync(join(dir, "export/windows/electron-main.cjs"))).toBe(true);
+    const electronMain = readFileSync(join(dir, "export/windows/electron-main.cjs"), "utf8");
+    // electron-main.cjs lives at export/windows/, the game is at public/
+    expect(electronMain).toContain('path.join(__dirname, "..", "..", "public", "index.html")');
     expect(existsSync(join(dir, "export/pwa/manifest.webmanifest"))).toBe(true);
     expect(existsSync(join(dir, "export/pwa/sw.js"))).toBe(true);
     const listing = readFileSync(join(dir, "export/store/listing.md"), "utf8");

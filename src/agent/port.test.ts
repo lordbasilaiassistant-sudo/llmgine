@@ -59,6 +59,16 @@ describe("AgentPort", () => {
     expect(evs.some((e) => e.type === "speech")).toBe(true);
   });
 
+  it("end-of-tick destroy events reach the ring buffer", () => {
+    const { world, port } = game();
+    const goblin = world.create();
+    world.destroy(goblin); // flushed AFTER all systems ran, incl. the port's
+    port.step(2);
+    expect(
+      port.events().some((e) => e.type === "entity:destroyed" && e.payload.entity === goblin),
+    ).toBe(true);
+  });
+
   it("state() exposes all components as plain data", () => {
     const { port } = game();
     const s = port.state();

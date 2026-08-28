@@ -140,8 +140,11 @@ export function describeEvent(world: World, type: string, payload: any): string 
 
 /** Compact perception → prompt text. Kept terse: flash-tier context is precious. */
 export function perceptionToText(p: Perception): string {
+  // disembodied minds (factions, directors) have no position — never emit
+  // a literal "(undefined,undefined)" for the model to reason about
+  const at = p.self.x !== undefined ? ` at (${p.self.x},${p.self.y})` : "";
   const lines: string[] = [
-    `You are ${p.self.name} at (${p.self.x},${p.self.y})${p.self.hp ? `, hp ${p.self.hp}` : ""}. t=${p.time}s.`,
+    `You are ${p.self.name}${at}${p.self.hp ? `, hp ${p.self.hp}` : ""}. t=${p.time}s.`,
   ];
   if (p.nearby.length) {
     lines.push("You see:");

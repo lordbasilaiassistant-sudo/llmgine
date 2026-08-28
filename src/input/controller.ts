@@ -130,17 +130,21 @@ export class TopDownControls {
       }
     };
     const onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.key.toLowerCase());
+    const onBlur = () => this.keys.clear(); // alt-tab must not leave WASD latched
     addEventListener("keydown", onKeyDown);
     addEventListener("keyup", onKeyUp);
+    addEventListener("blur", onBlur);
     this.disposers.push(() => {
       removeEventListener("keydown", onKeyDown);
       removeEventListener("keyup", onKeyUp);
+      removeEventListener("blur", onBlur);
     });
 
     if (opts.screenToWorld) {
       const target: any = opts.clickTarget ?? window;
       const onPointer = (e: PointerEvent) => {
         if ((e.target as HTMLElement)?.tagName !== "CANVAS") return;
+        if (e.button !== 0) return; // left click only — right-click is the context menu
         // resolve the ground point now (render/camera state), act in-tick
         const p = opts.screenToWorld!(e.clientX, e.clientY);
         if (p) this.pendingClick = p;
@@ -295,6 +299,21 @@ export class TopDownControls {
         drive.update(ctx);
       },
     };
+  }
+
+  /** Drop cached stick state so the next tick re-issues a `move` verb.
+   * Call after World.load / restart — PlayerControlled.moveX/Y is restored
+   * from the snapshot but this cache is not, so a leftover (0,0) cache
+   * against a restored (0,-1) intent would keep the hero auto-running. */
+  resync(): void {
+    this.lastMoveX = Number.NaN;
+    this.lastMoveY = Number.NaN;
+    this.keys.clear();
+    this.pendingClick = null;
+    this.actionBuf = 0;
+    this.jumpBuf = 0;
+    this.hotbarQueued = -1;
+    this.moveMarker = null;
   }
 
   dispose(): void {

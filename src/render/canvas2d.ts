@@ -111,7 +111,7 @@ export class Canvas2DRenderer implements Renderer {
     for (const e of world.query(Transform, Sprite)) {
       seen.add(e);
       const raw = world.require(e, Transform);
-      this.xf.sample(e, raw.x, raw.y, raw.rot);
+      this.xf.sample(e, raw.x, raw.y, raw.rot, 0, world.tick);
       const t = this.xf.at(e, alpha) ?? raw;
       drawables.push({ e, t, s: world.require(e, Sprite) });
     }

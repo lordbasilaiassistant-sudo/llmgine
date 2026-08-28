@@ -45,6 +45,18 @@ export class ActionRegistry {
    * surface for "why didn't my verb work" (agents live off this). */
   readonly recent: Array<Action & { tick: number; ok: boolean; error?: string }> = [];
   recentLimit = 200;
+  /** Live sinks used by startRecording — the capped `log` array is a
+   * diagnostic ring; recordings must not share its front-splice. */
+  private sinks: Array<(entry: Action & { tick: number; internal?: boolean }) => void> = [];
+
+  /** Subscribe to every accepted action (after the internal flag is applied). */
+  onAccepted(fn: (entry: Action & { tick: number; internal?: boolean }) => void): () => void {
+    this.sinks.push(fn);
+    return () => {
+      const i = this.sinks.indexOf(fn);
+      if (i >= 0) this.sinks.splice(i, 1);
+    };
+  }
 
   register(def: VerbDef): this {
     this.verbs.set(def.name, def);
@@ -76,6 +88,10 @@ export class ActionRegistry {
     if (result.ok && opts?.internal) {
       const last = this.log[this.log.length - 1];
       if (last) (last as any).internal = true;
+    }
+    if (result.ok && this.sinks.length) {
+      const last = this.log[this.log.length - 1];
+      if (last) for (const s of this.sinks) s(last);
     }
     return result;
   }

@@ -51,6 +51,15 @@ export class CognitionDriver {
    */
   private inFlightMinds = new Set<Entity>();
   private wired: World | null = null;
+  /**
+   * Load epoch — bumped whenever the observed world tick moves BACKWARDS
+   * (quickload/restart). A thought dispatched before the rewind must never
+   * apply after it: the sim quickly re-passes the dispatch tick (60 ticks/s
+   * vs multi-second LLM latency) and World.load rewinds nextEntity, so ids
+   * the thought perceived can be REBOUND to different entities post-load.
+   */
+  private epoch = 0;
+  private lastSeenTick = -1;
 
   constructor(private opts: CognitionOptions) {
     this.budget = opts.budget ?? new InferenceBudget();
@@ -72,12 +81,20 @@ export class CognitionDriver {
         this.inFlightMinds.delete(entity);
       });
     }
+    if (world.tick < this.lastSeenTick) {
+      this.epoch++;
+      this.pending.clear(); // those lines describe the discarded timeline
+    }
+    this.lastSeenTick = world.tick;
     // 1. route this tick's events to minds that can perceive them
     for (const j of world.events.journal) {
       const line = describeEvent(world, j.type, j.payload);
       for (const [e, mind] of world.each(Mind)) {
         const involved =
-          j.payload?.entity === e || j.payload?.target === e || j.payload?.source === e;
+          j.payload?.entity === e ||
+          j.payload?.target === e ||
+          j.payload?.source === e ||
+          j.payload?.from === e;
         const inRange = this.eventInRange(world, j.payload, e, mind.sightRange);
         if (!involved && !inRange) continue;
         if (line && j.payload?.entity !== e) {
@@ -122,12 +139,16 @@ export class CognitionDriver {
           // and surface in telemetry — never a silent no-op mind
           const m = world.get(e, Mind);
           this.applyFallback(world, e, m?.fallbackMode ?? "wander");
-          this.opts.onThought?.({
-            entity: e,
-            text: "",
-            toolCalls: [],
-            error: String((err as any)?.message ?? err),
-          });
+          try {
+            this.opts.onThought?.({
+              entity: e,
+              text: "",
+              toolCalls: [],
+              error: String((err as any)?.message ?? err),
+            });
+          } catch {
+            // a throwing telemetry callback must not become an unhandled rejection
+          }
         })
         .finally(() => {
           this.budget.release();
@@ -149,11 +170,18 @@ export class CognitionDriver {
   private eventInRange(world: World, payload: any, e: Entity, range: number): boolean {
     const t = world.get(e, Transform);
     if (!t) return false;
-    const src: Entity | undefined = payload?.entity ?? payload?.target ?? payload?.source;
-    if (src === undefined) return false;
-    const st = world.get(src, Transform);
-    if (!st) return false;
-    return Math.hypot(st.x - t.x, st.y - t.y) <= range;
+    const src: Entity | undefined =
+      payload?.entity ?? payload?.target ?? payload?.source ?? payload?.from;
+    if (src !== undefined) {
+      const st = world.get(src, Transform);
+      if (st) return Math.hypot(st.x - t.x, st.y - t.y) <= range;
+    }
+    // events keyed by position only (loot:dropped, area telegraphs) — the
+    // emitting entity may already be destroyed, but the location still matters
+    if (typeof payload?.x === "number" && typeof payload?.y === "number") {
+      return Math.hypot(payload.x - t.x, payload.y - t.y) <= range;
+    }
+    return false;
   }
 
   private applyFallback(world: World, e: Entity, mode: string): void {
@@ -163,6 +191,7 @@ export class CognitionDriver {
 
   private async think(world: World, e: Entity): Promise<void> {
     const dispatchTick = world.tick;
+    const dispatchEpoch = this.epoch;
     const mind = world.require(e, Mind);
     const perception = buildPerception(world, this.opts.grid, e, mind.sightRange);
     // pending already accumulated this tick's journal lines during routing —
@@ -224,18 +253,34 @@ export class CognitionDriver {
       const res = await this.opts.provider.chat({ tier, messages, tools, maxTokens: 300 });
       this.budget.noteUsage(res.usage?.totalTokens ?? 0);
       // stale thought: the world rewound (quickload) while this was in
-      // flight — its intents describe a world that no longer exists
-      if (world.tick < dispatchTick) {
+      // flight — its intents describe a world that no longer exists. The
+      // epoch catches rewinds the sim already re-advanced past (entity ids
+      // may have been rebound by World.load's nextEntity rewind).
+      if (world.tick < dispatchTick || this.epoch !== dispatchEpoch) {
         this.opts.onThought?.({ entity: e, text: "", toolCalls: [], error: "stale thought dropped (world rewound)" });
         return;
       }
       const used: string[] = [];
+      const denied: string[] = [];
+      // Mind.verbs is a hard allowlist, not a suggestion — models hallucinate
+      // verbs outside their offered schema, and ActionRegistry only validates
+      // capability (components), not per-mind permission.
+      const allow = mind.verbs.length ? new Set(mind.verbs) : null;
       for (const tc of res.toolCalls) {
+        if (allow && !allow.has(tc.name)) {
+          denied.push(tc.name);
+          continue;
+        }
         this.opts.actions.submit({ actor: e, verb: tc.name, params: tc.args });
         used.push(tc.name);
       }
       // Flash-tier models often answer in plain text; treat it as speech.
-      if (res.text.trim() && !used.includes("say") && this.opts.actions.get("say")) {
+      if (
+        res.text.trim() &&
+        !used.includes("say") &&
+        (!allow || allow.has("say")) &&
+        this.opts.actions.get("say")
+      ) {
         this.opts.actions.submit({
           actor: e,
           verb: "say",
@@ -250,7 +295,12 @@ export class CognitionDriver {
           `I ${used.length ? `did: ${used.join(", ")}` : "did nothing"}${res.text ? ` — "${res.text.slice(0, 60)}"` : ""}`,
         );
       }
-      this.opts.onThought?.({ entity: e, text: res.text, toolCalls: used });
+      this.opts.onThought?.({
+        entity: e,
+        text: res.text,
+        toolCalls: used,
+        error: denied.length ? `verbs outside this mind's allowlist dropped: ${denied.join(", ")}` : undefined,
+      });
     } catch (err: any) {
       this.applyFallback(world, e, mind.fallbackMode);
       if (mem) remember(mem, world.time, "my mind went quiet; acting on instinct");

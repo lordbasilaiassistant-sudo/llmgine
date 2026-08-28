@@ -28,23 +28,26 @@ export interface ReplaySession {
   log: Array<Action & { tick: number }>;
   /** Ticks from snapshot to end of recording. */
   ticks: number;
+  /** Sim timestep used while recording. Replays MUST step at the same dt. */
+  timestep: number;
 }
 
-export function startRecording(world: World, actions: ActionRegistry) {
+export function startRecording(world: World, actions: ActionRegistry, timestep = 1 / 60) {
   const snapshot = world.save();
   const startTick = world.tick;
-  const startLen = actions.log.length;
+  const captured: Array<Action & { tick: number }> = [];
+  const unsub = actions.onAccepted((a) => {
+    if ((a as any).internal) return;
+    captured.push({ actor: a.actor, verb: a.verb, params: { ...a.params }, tick: a.tick });
+  });
   return {
     stop(): ReplaySession {
+      unsub();
       return {
         snapshot,
-        // internal (system-originated) actions re-arise deterministically
-        // during replay — recording them too would double-fire
-        log: actions.log
-          .slice(startLen)
-          .filter((a) => !(a as any).internal)
-          .map((a) => ({ ...a, params: { ...a.params } })),
+        log: captured,
         ticks: world.tick - startTick,
+        timestep,
       };
     },
   };
@@ -89,10 +92,17 @@ export function verifyReplay(
   const { world, actions } = buildWorld();
   world.load(session.snapshot, types);
   world.addSystem(replaySystem(actions, session.log));
-  for (let i = 0; i < session.ticks; i++) world.step(1 / 60);
+  const dt = session.timestep || 1 / 60;
+  for (let i = 0; i < session.ticks; i++) world.step(dt);
   const strip = (s: WorldSnapshot) => {
     const c = structuredClone(s);
     for (const name of ignoreComponents) delete c.components[name];
+    // key order of the stores Map is insertion-order and not semantically
+    // part of world state — sort so an empty-then-recreated store can't
+    // produce a false "diverged" on byte comparison
+    const ordered: typeof c.components = {};
+    for (const k of Object.keys(c.components).sort()) ordered[k] = c.components[k];
+    c.components = ordered;
     return JSON.stringify(c);
   };
   return strip(world.save()) === strip(expectedFinal);

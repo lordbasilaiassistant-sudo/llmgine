@@ -57,6 +57,20 @@ describe("ECS", () => {
     expect(w2.rng.next()).toBe(w.rng.next()); // rng state restored
   });
 
+  it("save/load preserves in-flight journal so next-tick reactions still fire", () => {
+    const w = new World(1);
+    const victim = w.create();
+    w.add(victim, Transform, {});
+    w.events.emit("combat:damaged", { target: victim, source: 99, amount: 5 }); // off-tick
+    const snap = w.save();
+    expect(snap.events?.offTick.some((e) => e.type === "combat:damaged")).toBe(true);
+
+    const w2 = new World();
+    w2.load(structuredClone(snap), [Transform]);
+    w2.step(1 / 60);
+    expect(w2.events.journal.some((j) => j.type === "combat:damaged")).toBe(true);
+  });
+
   it("is deterministic: same seed + 1000 ticks = identical state", () => {
     const run = () => {
       const w = new World(1234);

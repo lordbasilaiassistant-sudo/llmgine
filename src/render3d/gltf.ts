@@ -52,6 +52,9 @@ export function gltfModel(asset: LoadedGLTF, opts: GltfModelOptions = {}): Model
     inst.scale.setScalar(opts.scale ?? 1);
     inst.position.y = opts.yOffset ?? 0;
     root.add(inst);
+    // this factory steers its own rig (heading from Velocity) — opt the
+    // root out of ThreeRenderer's Transform.rot yaw or they'd double-rotate
+    root.userData.selfRotate = true;
 
     let mixer: THREE.AnimationMixer | null = null;
     let walk: THREE.AnimationAction | null = null;

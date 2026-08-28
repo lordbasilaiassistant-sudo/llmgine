@@ -176,7 +176,7 @@ const exporters: Record<string, Exporter> = {
 const path = require("path");
 app.whenReady().then(() => {
   const win = new BrowserWindow({ width: 1280, height: 720, autoHideMenuBar: true, backgroundColor: "#0d0a12" });
-  win.loadFile(path.join(__dirname, "..", "public", "index.html"));
+  win.loadFile(path.join(__dirname, "..", "..", "public", "index.html"));
 });
 app.on("window-all-closed", () => app.quit());
 `);

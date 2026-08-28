@@ -55,4 +55,11 @@ export class SpatialGrid {
     this.cells.clear();
     this.where.clear();
   }
+
+  /** Drop entries whose entities are no longer alive (World.load bypasses destroy events). */
+  prune(alive: (e: Entity) => boolean): void {
+    for (const e of [...this.where.keys()]) {
+      if (!alive(e)) this.delete(e);
+    }
+  }
 }

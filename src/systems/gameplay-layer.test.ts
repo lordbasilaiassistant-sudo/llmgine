@@ -77,7 +77,7 @@ describe("area_strike — the telegraphed danger circle", () => {
   it("telegraphs, detonates after the fuse, and airborne targets clear it", () => {
     const { world, actions } = sim();
     const caster = world.create();
-    world.add(caster, Transform, {});
+    world.add(caster, Transform, { x: 120, y: 0 });
     world.add(caster, AreaAttack, { damage: 25, radius: 60, delay: 0.4, range: 300, knockback: 200 });
     world.add(caster, Faction, { id: "arena" });
     const grounded = world.create();
@@ -101,6 +101,7 @@ describe("area_strike — the telegraphed danger circle", () => {
     expect(hit).toBe(true);
     expect(world.require(grounded, Health).hp).toBe(25); // caught it
     expect(world.require(jumper, Health).hp).toBe(50); // jumped it
+    expect(world.require(grounded, Velocity).kx).not.toBe(0); // shoved from the ZONE (caster is at origin)
     expect([...world.each(AreaStrikeZone)].length).toBe(0); // zone cleaned up
     // cooldown gates the next one
     expect(actions.execute(world, { actor: caster, verb: "area_strike", params: { x: 0, y: 0 } }).ok).toBe(false);

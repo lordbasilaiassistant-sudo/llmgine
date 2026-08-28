@@ -897,11 +897,12 @@ async function spawnRelic(): Promise<void> {
 const overlays = document.getElementById("overlays")!;
 const bubbles = new Map<number, HTMLDivElement>();
 function spawnDmgNum(x: number, y: number, text: string, color: string) {
+  const p = renderer.project(x, y, 40);
+  if (!p.visible) return;
   const el = document.createElement("div");
   el.className = "dmgnum";
   el.style.color = color;
   el.textContent = text;
-  const p = renderer.project(x, y, 40);
   el.style.left = `${p.sx}px`;
   el.style.top = `${p.sy}px`;
   overlays.appendChild(el);
@@ -954,8 +955,13 @@ function syncOverlays() {
       const t = world.get(e, Transform);
       if (t) {
         const p = renderer.project(t.x, t.y, 30);
-        el.style.left = `${p.sx}px`;
-        el.style.top = `${p.sy}px`;
+        if (!p.visible) {
+          el.style.display = "none";
+        } else {
+          el.style.display = "";
+          el.style.left = `${p.sx}px`;
+          el.style.top = `${p.sy}px`;
+        }
         const bar = el.firstElementChild as HTMLElement;
         bar.style.width = `${(h.hp / h.maxHp) * 100}%`;
         bar.className = h.hp / h.maxHp < 0.35 ? "low" : "";
@@ -1042,6 +1048,7 @@ function renderFrame(alpha: number) {
 // ── load/restart hygiene: module state must follow the world ───
 function resetAfterLoad() {
   spawnClock = 10;
+  controls.resync();
   // pool lights stay in the scene (constant light count = no shader
   // recompiles) — just snuff them
   for (const f of flashes) {

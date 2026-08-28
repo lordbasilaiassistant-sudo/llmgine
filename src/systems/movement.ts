@@ -28,7 +28,9 @@ export function movementSystem(grid: SpatialGrid, bounds?: WorldBounds, opts: Mo
       if (wired !== world) {
         wired = world;
         world.events.on("entity:destroyed", ({ entity }) => grid.delete(entity));
+        world.events.on("world:loaded", () => grid.clear());
       }
+      grid.prune((e) => world.isAlive(e));
       for (const e of world.query(Transform, Velocity)) {
         const t = world.require(e, Transform);
         const v = world.require(e, Velocity);
